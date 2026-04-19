@@ -24,6 +24,7 @@ type ActiveTurn = {
   roomId: string;
   speakerId: string;
   sourceLanguage: SupportedLanguage;
+  audioChunks: Buffer[];
   textChunks: string[];
 };
 
@@ -32,6 +33,14 @@ const decodeAudioPayload = (payloadBase64: string): string => {
     return Buffer.from(payloadBase64, "base64").toString("utf8").trim();
   } catch {
     return "";
+  }
+};
+
+const decodeAudioBytes = (payloadBase64: string): Buffer | null => {
+  try {
+    return Buffer.from(payloadBase64, "base64");
+  } catch {
+    return null;
   }
 };
 
@@ -85,6 +94,7 @@ export class RoomHub {
           roomId: event.roomId,
           speakerId: clientId,
           sourceLanguage: event.speakerLanguage,
+          audioChunks: [],
           textChunks: []
         });
         return;
@@ -92,6 +102,10 @@ export class RoomHub {
         const turn = this.activeTurns.get(event.turnId);
         if (!turn) {
           return;
+        }
+        const chunkBytes = decodeAudioBytes(event.payloadBase64);
+        if (chunkBytes) {
+          turn.audioChunks.push(chunkBytes);
         }
         const textChunk = decodeAudioPayload(event.payloadBase64);
         if (textChunk.length > 0) {
@@ -136,7 +150,13 @@ export class RoomHub {
       this.activeTurns.delete(turnId);
       return;
     }
-    const sourceText = turn.textChunks.join(" ").trim();
+    const sourceText = (
+      await this.providers.transcribeSpeech({
+        sourceLanguage: turn.sourceLanguage,
+        chunks: turn.audioChunks,
+        textHints: turn.textChunks
+      })
+    ).trim();
     const sourceSpeaker = room.participants.get(turn.speakerId);
     if (!sourceSpeaker || sourceText.length === 0) {
       this.activeTurns.delete(turnId);
@@ -186,12 +206,17 @@ export class RoomHub {
       });
 
       if (participant.clientId !== turn.speakerId && participant.hearAudio) {
+        const payloadBase64 = await this.providers.synthesizeSpeech({
+          text: translatedText,
+          targetLanguage,
+          speakerId: sourceSpeaker.clientId
+        });
         this.send(participant.socket, {
           type: "audio.chunk",
           turnId,
           targetLanguage,
           mimeType: "audio/pcm",
-          payloadBase64: Buffer.from(translatedText).toString("base64"),
+          payloadBase64,
           sequence: 0,
           isLast: true
         });

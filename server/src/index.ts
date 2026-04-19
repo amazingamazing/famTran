@@ -39,6 +39,13 @@ const boot = async () => {
     stt: appConfig.providers.stt,
     translation: appConfig.providers.translation,
     tts: appConfig.providers.tts
+  }, {
+    deepgramApiKey: appConfig.apiKeys.deepgram,
+    geminiApiKey: appConfig.apiKeys.gemini,
+    geminiModel: appConfig.models.gemini,
+    cartesiaApiKey: appConfig.apiKeys.cartesia,
+    cartesiaModelId: appConfig.models.cartesia,
+    openAiApiKey: appConfig.apiKeys.openAi
   });
   const roomHub = new RoomHub(db, providers);
 
