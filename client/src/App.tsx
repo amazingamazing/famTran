@@ -11,6 +11,14 @@ type TranscriptRow = {
   originalText: string;
   targetLanguage: SupportedLanguage;
   timestamp: number;
+  debug?: {
+    transcriptionPath: string;
+    transcriptionDetail?: string;
+    translationPath: string;
+    translationDetail?: string;
+    ttsPath?: string;
+    ttsDetail?: string;
+  };
 };
 
 const WS_BASE_URL =
@@ -261,7 +269,8 @@ function App() {
             translatedText: event.translatedText,
             originalText: event.originalText,
             targetLanguage: event.targetLanguage,
-            timestamp: event.timestamp
+            timestamp: event.timestamp,
+            debug: event.debug
           },
           ...previous
         ]);
@@ -276,7 +285,9 @@ function App() {
           oscillator.start();
           oscillator.stop(audioContext.currentTime + 0.06);
         }
-        addDebugEvent(`transcript.chunk turn=${event.turnId} final=${event.isFinal}`);
+        addDebugEvent(
+          `transcript.chunk turn=${event.turnId} final=${event.isFinal} stt=${event.debug?.transcriptionPath ?? "n/a"} tx=${event.debug?.translationPath ?? "n/a"} tts=${event.debug?.ttsPath ?? "n/a"}`
+        );
         return;
       }
       if (event.type === "audio.chunk") {
@@ -429,7 +440,8 @@ function App() {
         timestamp: item.timestamp,
         turnId: item.turnId,
         translatedText: item.translatedText,
-        originalText: item.originalText
+        originalText: item.originalText,
+        debug: item.debug
       })),
       recentEvents: debugEventsRef.current
     };

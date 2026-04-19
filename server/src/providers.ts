@@ -33,17 +33,27 @@ type ProviderSecrets = {
   openAiApiKey?: string;
 };
 
+type PipelineResult<T> = {
+  value: T;
+  path: string;
+  detail?: string;
+};
+
+export type TranscriptionResult = PipelineResult<string>;
+export type TranslationResult = PipelineResult<string>;
+export type SynthesisResult = PipelineResult<string>;
+
 export interface ProviderPipeline {
   setProviders(next: ProviderSelection): ProviderSelection;
   getProviders(): ProviderSelection;
-  transcribeSpeech(input: TranscriptionInput): Promise<string>;
+  transcribeSpeech(input: TranscriptionInput): Promise<TranscriptionResult>;
   translateText(args: {
     sourceText: string;
     sourceLanguage: SupportedLanguage;
     targetLanguage: SupportedLanguage;
     context: TranslationContext;
-  }): Promise<string>;
-  synthesizeSpeech(args: SynthInput): Promise<string>;
+  }): Promise<TranslationResult>;
+  synthesizeSpeech(args: SynthInput): Promise<SynthesisResult>;
 }
 
 export class InMemoryProviderPipeline implements ProviderPipeline {
@@ -64,11 +74,11 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
     return this.providers;
   }
 
-  async transcribeSpeech(input: TranscriptionInput): Promise<string> {
+  async transcribeSpeech(input: TranscriptionInput): Promise<TranscriptionResult> {
     // Typed-message simulator uses UTF-8 payloads as text hints.
     const hinted = input.textHints.join(" ").trim();
     if (hinted.length > 0) {
-      return hinted;
+      return { value: hinted, path: "stt.hint_utf8" };
     }
 
     if (this.providers.stt === "deepgram" && this.secrets.deepgramApiKey && input.chunks.length > 0) {
@@ -87,18 +97,22 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
           }
         );
         if (!response.ok) {
-          return "";
+          return { value: "", path: "stt.deepgram_http_error", detail: `status=${response.status}` };
         }
         const payload = (await response.json()) as {
           results?: { channels?: Array<{ alternatives?: Array<{ transcript?: string }> }> };
         };
-        return payload.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? "";
+        const transcript = payload.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? "";
+        if (transcript.length > 0) {
+          return { value: transcript, path: "stt.deepgram_api" };
+        }
+        return { value: "", path: "stt.deepgram_empty" };
       } catch {
-        return "";
+        return { value: "", path: "stt.deepgram_exception" };
       }
     }
 
-    return "";
+    return { value: "", path: "stt.no_input" };
   }
 
   async translateText(args: {
@@ -106,7 +120,7 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
     sourceLanguage: SupportedLanguage;
     targetLanguage: SupportedLanguage;
     context: TranslationContext;
-  }) {
+  }): Promise<TranslationResult> {
     if (this.providers.translation === "gemini" && this.secrets.geminiApiKey) {
       const prompt = [
         `Translate from ${args.sourceLanguage} to ${args.targetLanguage}.`,
@@ -140,6 +154,11 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
             }
           );
           if (!response.ok) {
+            const detail = `model=${model} status=${response.status}`;
+            // Keep trying fallback model before returning.
+            if (model === modelsToTry[modelsToTry.length - 1]) {
+              return { value: args.sourceText, path: "translation.gemini_http_error", detail };
+            }
             continue;
           }
           const payload = (await response.json()) as {
@@ -147,10 +166,15 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
           };
           const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
           if (text) {
-            return text;
+            return { value: text, path: `translation.gemini_api:${model}` };
+          }
+          if (model === modelsToTry[modelsToTry.length - 1]) {
+            return { value: args.sourceText, path: "translation.gemini_empty", detail: `model=${model}` };
           }
         } catch {
-          // Try fallback model.
+          if (model === modelsToTry[modelsToTry.length - 1]) {
+            return { value: args.sourceText, path: "translation.gemini_exception", detail: `model=${model}` };
+          }
         }
       }
     }
@@ -177,17 +201,22 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
         });
         if (response.ok) {
           const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-          return payload.choices?.[0]?.message?.content?.trim() ?? args.sourceText;
+          const text = payload.choices?.[0]?.message?.content?.trim();
+          if (text && text.length > 0) {
+            return { value: text, path: "translation.openai_api" };
+          }
+          return { value: args.sourceText, path: "translation.openai_empty" };
         }
+        return { value: args.sourceText, path: "translation.openai_http_error", detail: `status=${response.status}` };
       } catch {
-        // Fall through to passthrough.
+        return { value: args.sourceText, path: "translation.openai_exception" };
       }
     }
 
-    return args.sourceText;
+    return { value: args.sourceText, path: "translation.passthrough" };
   }
 
-  async synthesizeSpeech(args: SynthInput): Promise<string> {
+  async synthesizeSpeech(args: SynthInput): Promise<SynthesisResult> {
     if (this.providers.tts === "cartesia" && this.secrets.cartesiaApiKey) {
       try {
         const response = await fetch("https://api.cartesia.ai/tts/bytes", {
@@ -214,10 +243,11 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
         });
         if (response.ok) {
           const bytes = new Uint8Array(await response.arrayBuffer());
-          return Buffer.from(bytes).toString("base64");
+          return { value: Buffer.from(bytes).toString("base64"), path: "tts.cartesia_api" };
         }
+        return { value: Buffer.from(args.text).toString("base64"), path: "tts.cartesia_http_error", detail: `status=${response.status}` };
       } catch {
-        // Fall through to fallback payload.
+        return { value: Buffer.from(args.text).toString("base64"), path: "tts.cartesia_exception" };
       }
     }
 
@@ -238,14 +268,15 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
         });
         if (response.ok) {
           const bytes = new Uint8Array(await response.arrayBuffer());
-          return Buffer.from(bytes).toString("base64");
+          return { value: Buffer.from(bytes).toString("base64"), path: "tts.openai_api" };
         }
+        return { value: Buffer.from(args.text).toString("base64"), path: "tts.openai_http_error", detail: `status=${response.status}` };
       } catch {
-        // Fall through to fallback payload.
+        return { value: Buffer.from(args.text).toString("base64"), path: "tts.openai_exception" };
       }
     }
 
-    return Buffer.from(args.text).toString("base64");
+    return { value: Buffer.from(args.text).toString("base64"), path: "tts.passthrough_text_base64" };
   }
 }
 

@@ -20,6 +20,14 @@ export type ServerEvent =
       originalText: string;
       isFinal: boolean;
       timestamp: number;
+      debug?: {
+        transcriptionPath: string;
+        transcriptionDetail?: string;
+        translationPath: string;
+        translationDetail?: string;
+        ttsPath?: string;
+        ttsDetail?: string;
+      };
     }
   | {
       type: "audio.chunk";
