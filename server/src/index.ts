@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
+
+import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
 import { WebSocketServer } from "ws";
 import { z } from "zod";
@@ -14,6 +18,18 @@ const createRoomCode = () => {
     value += alphabet[Math.floor(Math.random() * alphabet.length)];
   }
   return value;
+};
+
+const resolveClientDistPath = () => {
+  const cwdCandidate = path.resolve(process.cwd(), "client", "dist");
+  if (fs.existsSync(cwdCandidate)) {
+    return cwdCandidate;
+  }
+  const relativeCandidate = path.resolve(process.cwd(), "..", "client", "dist");
+  if (fs.existsSync(relativeCandidate)) {
+    return relativeCandidate;
+  }
+  return null;
 };
 
 const boot = async () => {
@@ -45,6 +61,28 @@ const boot = async () => {
       return { ok: true };
     }
   );
+
+  const clientDistPath = resolveClientDistPath();
+  if (clientDistPath) {
+    await app.register(fastifyStatic, {
+      root: clientDistPath,
+      prefix: "/"
+    });
+
+    app.get("/", async (_request, reply) => reply.sendFile("index.html"));
+    app.setNotFoundHandler(async (request, reply) => {
+      if (request.url.startsWith("/api") || request.url.startsWith("/health")) {
+        return reply.code(404).send({
+          message: `Route ${request.method}:${request.url} not found`,
+          error: "Not Found",
+          statusCode: 404
+        });
+      }
+      return reply.type("text/html").sendFile("index.html");
+    });
+  } else {
+    app.log.warn("client/dist not found, root path will not serve the frontend");
+  }
 
   const address = await app.listen({ host: appConfig.host, port: appConfig.port });
   app.log.info({ address }, "HTTP server running");
