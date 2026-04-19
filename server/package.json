@@ -1,0 +1,39 @@
+{
+  "name": "@family-translation/server",
+  "version": "0.1.0",
+  "description": "Realtime translation websocket backend",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "lint": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@family-translation/shared": "0.1.0",
+    "better-sqlite3": "^12.4.1",
+    "dotenv": "^17.2.3",
+    "fastify": "^5.6.1",
+    "pino-pretty": "^13.1.2",
+    "zod": "^4.1.12",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.12.2",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  },
+  "keywords": [
+    "fastify",
+    "websocket",
+    "translation"
+  ],
+  "author": "Family Translation",
+  "license": "ISC",
+  "type": "module"
+}
