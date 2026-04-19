@@ -1,0 +1,25 @@
+{
+  "name": "@family-translation/shared",
+  "version": "0.1.0",
+  "description": "Shared contracts for family translation app",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "vitest run",
+    "lint": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  },
+  "keywords": [
+    "shared",
+    "types"
+  ],
+  "author": "Family Translation",
+  "license": "ISC",
+  "type": "module"
+}
