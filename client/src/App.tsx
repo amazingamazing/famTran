@@ -26,11 +26,35 @@ const HTTP_BASE_URL =
 const createTurnId = () => `turn-${crypto.randomUUID()}`;
 
 const encodeStringAsBase64 = (value: string) => btoa(unescape(encodeURIComponent(value)));
+const AUTOPILOT_MIN_MS = 15_000;
+const AUTOPILOT_MAX_MS = 45_000;
+const MAX_DEBUG_EVENTS = 120;
+
+const AUTO_MESSAGES = [
+  "How is everyone feeling this afternoon?",
+  "I am going to make tea in a few minutes.",
+  "Pepe is sleeping on the couch again.",
+  "Can we plan dinner for tonight?",
+  "I need to leave for the store soon.",
+  "This is a simulator message for latency testing.",
+  "Let's talk about travel plans for next week.",
+  "Please remind me to charge my earbuds.",
+  "I am checking whether reconnection still works.",
+  "The weather looks good for a walk later."
+];
+
+const randomDelayMs = () =>
+  Math.floor(Math.random() * (AUTOPILOT_MAX_MS - AUTOPILOT_MIN_MS + 1)) + AUTOPILOT_MIN_MS;
+
+const randomAutoMessage = () => AUTO_MESSAGES[Math.floor(Math.random() * AUTO_MESSAGES.length)];
 
 function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const audioQueueRef = useRef<Array<{ payloadBase64: string; isLast: boolean }>>([]);
   const playingRef = useRef(false);
+  const autopilotTimeoutRef = useRef<number | null>(null);
+  const autoPilotEnabledRef = useRef(false);
+  const debugEventsRef = useRef<string[]>([]);
   const [roomId, setRoomId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [language, setLanguage] = useState<SupportedLanguage>("en");
@@ -51,6 +75,22 @@ function App() {
   const [manualNotes, setManualNotes] = useState("");
   const [networkOnline, setNetworkOnline] = useState(navigator.onLine);
   const [statusMessage, setStatusMessage] = useState("Not connected");
+  const [autoPilotEnabled, setAutoPilotEnabled] = useState(false);
+  const [autoPilotRuns, setAutoPilotRuns] = useState(0);
+  const [nextAutoDelaySeconds, setNextAutoDelaySeconds] = useState<number | null>(null);
+
+  const addDebugEvent = (message: string) => {
+    const entry = `${new Date().toISOString()} ${message}`;
+    debugEventsRef.current = [entry, ...debugEventsRef.current].slice(0, MAX_DEBUG_EVENTS);
+  };
+
+  const clearAutoPilotTimer = () => {
+    if (autopilotTimeoutRef.current !== null) {
+      window.clearTimeout(autopilotTimeoutRef.current);
+      autopilotTimeoutRef.current = null;
+    }
+    setNextAutoDelaySeconds(null);
+  };
 
   const playQueue = () => {
     if (playingRef.current) {
@@ -100,6 +140,67 @@ function App() {
     };
   }, []);
 
+  useEffect(
+    () => () => {
+      clearAutoPilotTimer();
+    },
+    []
+  );
+
+  useEffect(() => {
+    autoPilotEnabledRef.current = autoPilotEnabled;
+  }, [autoPilotEnabled]);
+
+  const sendTurn = (messageText: string, source: "manual" | "autopilot") => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !messageText.trim() || !connected) {
+      return false;
+    }
+    const turnId = createTurnId();
+    const normalizedRoomId = roomId.trim().toUpperCase();
+    wsRef.current.send(
+      JSON.stringify({
+        type: "turn.start",
+        turnId,
+        roomId: normalizedRoomId,
+        speakerLanguage: language
+      })
+    );
+    wsRef.current.send(
+      JSON.stringify({
+        type: "audio.input",
+        turnId,
+        roomId: normalizedRoomId,
+        payloadBase64: encodeStringAsBase64(messageText.trim()),
+        sequence: 0,
+        isLast: true
+      })
+    );
+    wsRef.current.send(
+      JSON.stringify({
+        type: "turn.stop",
+        turnId,
+        roomId: normalizedRoomId
+      })
+    );
+    addDebugEvent(`turn.sent source=${source} turnId=${turnId} chars=${messageText.trim().length}`);
+    return true;
+  };
+
+  const scheduleAutoPilot = () => {
+    if (!autoPilotEnabledRef.current) {
+      return;
+    }
+    const delay = randomDelayMs();
+    setNextAutoDelaySeconds(Math.round(delay / 1000));
+    autopilotTimeoutRef.current = window.setTimeout(() => {
+      const sent = sendTurn(randomAutoMessage(), "autopilot");
+      if (sent) {
+        setAutoPilotRuns((previous) => previous + 1);
+      }
+      scheduleAutoPilot();
+    }, delay);
+  };
+
   const connect = () => {
     if (!roomId.trim() || !displayName.trim()) {
       setStatusMessage("Set room and display name first.");
@@ -108,9 +209,11 @@ function App() {
     wsRef.current?.close();
     const ws = new WebSocket(WS_BASE_URL);
     wsRef.current = ws;
+    addDebugEvent(`socket.connecting room=${roomId.trim().toUpperCase()} lang=${language}`);
 
     ws.onopen = () => {
       setStatusMessage("Socket connected");
+      addDebugEvent("socket.open");
       ws.send(
         JSON.stringify({
           type: "session.join",
@@ -127,18 +230,27 @@ function App() {
     ws.onmessage = (rawEvent) => {
       const event = parseEvent((rawEvent as MessageEvent<string>).data);
       if (!event) {
+        addDebugEvent("socket.message.invalid");
         return;
       }
       if (event.type === "session.joined") {
         setConnected(true);
         setClientId(event.clientId);
         setStatusMessage(`Joined room ${event.roomId}`);
+        addDebugEvent(`session.joined room=${event.roomId} client=${event.clientId}`);
+        if (autoPilotEnabled) {
+          clearAutoPilotTimer();
+          scheduleAutoPilot();
+        }
         return;
       }
       if (event.type === "providers.updated") {
         setProviderStt(event.stt);
         setProviderTranslation(event.translation);
         setProviderTts(event.tts);
+        addDebugEvent(
+          `providers.updated stt=${event.stt} translation=${event.translation} tts=${event.tts}`
+        );
         return;
       }
       if (event.type === "transcript.chunk") {
@@ -164,60 +276,48 @@ function App() {
           oscillator.start();
           oscillator.stop(audioContext.currentTime + 0.06);
         }
+        addDebugEvent(`transcript.chunk turn=${event.turnId} final=${event.isFinal}`);
         return;
       }
       if (event.type === "audio.chunk") {
         audioQueueRef.current.push({ payloadBase64: event.payloadBase64, isLast: event.isLast });
         playQueue();
+        addDebugEvent(`audio.chunk turn=${event.turnId} last=${event.isLast}`);
         return;
       }
       if (event.type === "error") {
         setStatusMessage(event.message);
+        addDebugEvent(`server.error message=${event.message}`);
       }
     };
 
     ws.onclose = () => {
       setConnected(false);
       setStatusMessage("Socket disconnected");
+      addDebugEvent("socket.closed");
+      clearAutoPilotTimer();
+      autoPilotEnabledRef.current = false;
+      setAutoPilotEnabled(false);
+    };
+
+    ws.onerror = () => {
+      addDebugEvent("socket.error");
     };
   };
 
   const disconnect = () => {
+    clearAutoPilotTimer();
+    autoPilotEnabledRef.current = false;
+    setAutoPilotEnabled(false);
     wsRef.current?.close();
     wsRef.current = null;
   };
 
   const submitTurn = () => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !textInput.trim() || !connected) {
-      return;
+    const sent = sendTurn(textInput, "manual");
+    if (sent) {
+      setTextInput("");
     }
-    const turnId = createTurnId();
-    wsRef.current.send(
-      JSON.stringify({
-        type: "turn.start",
-        turnId,
-        roomId: roomId.trim().toUpperCase(),
-        speakerLanguage: language
-      })
-    );
-    wsRef.current.send(
-      JSON.stringify({
-        type: "audio.input",
-        turnId,
-        roomId: roomId.trim().toUpperCase(),
-        payloadBase64: encodeStringAsBase64(textInput.trim()),
-        sequence: 0,
-        isLast: true
-      })
-    );
-    wsRef.current.send(
-      JSON.stringify({
-        type: "turn.stop",
-        turnId,
-        roomId: roomId.trim().toUpperCase()
-      })
-    );
-    setTextInput("");
   };
 
   const saveGlossary = async () => {
@@ -240,6 +340,7 @@ function App() {
       setManualTranslation("");
       setManualNotes("");
       setStatusMessage("Glossary saved");
+      addDebugEvent(`glossary.saved term=${manualTerm.trim()}`);
     }
   };
 
@@ -260,6 +361,7 @@ function App() {
     setCorrectionRight("");
     setCorrectionContext("");
     setStatusMessage("Correction submitted");
+    addDebugEvent(`correction.submitted wrong=${correctionWrong.trim()}`);
   };
 
   const saveProviders = () => {
@@ -271,17 +373,89 @@ function App() {
         tts: providerTts
       })
     );
+    addDebugEvent(`providers.sent stt=${providerStt} translation=${providerTranslation} tts=${providerTts}`);
+  };
+
+  const toggleAutoPilot = () => {
+    if (!connected) {
+      setStatusMessage("Connect first before starting autopilot.");
+      return;
+    }
+    if (autoPilotEnabled) {
+      setAutoPilotEnabled(false);
+      autoPilotEnabledRef.current = false;
+      clearAutoPilotTimer();
+      addDebugEvent("autopilot.disabled");
+      return;
+    }
+    setAutoPilotEnabled(true);
+    autoPilotEnabledRef.current = true;
+    addDebugEvent("autopilot.enabled");
+    clearAutoPilotTimer();
+    scheduleAutoPilot();
+  };
+
+  const copyDebugBlob = async () => {
+    const payload = {
+      capturedAt: new Date().toISOString(),
+      app: {
+        connected,
+        networkOnline,
+        statusMessage,
+        roomId: roomId.trim().toUpperCase(),
+        clientId,
+        displayName,
+        language,
+        hearAudio,
+        autoPilotEnabled,
+        autoPilotRuns,
+        nextAutoDelaySeconds,
+        transcriptCount: transcripts.length,
+        providers: {
+          stt: providerStt,
+          translation: providerTranslation,
+          tts: providerTts
+        }
+      },
+      environment: {
+        userAgent: navigator.userAgent,
+        href: window.location.href,
+        viewport: {
+          width: window.innerWidth,
+          height: window.innerHeight
+        }
+      },
+      recentTranscriptSample: transcripts.slice(0, 5).map((item) => ({
+        timestamp: item.timestamp,
+        turnId: item.turnId,
+        translatedText: item.translatedText,
+        originalText: item.originalText
+      })),
+      recentEvents: debugEventsRef.current
+    };
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setStatusMessage("Debug blob copied to clipboard.");
+      addDebugEvent("debug.copied");
+    } catch {
+      setStatusMessage("Could not copy debug blob. Retry in Safari app context.");
+      addDebugEvent("debug.copy.failed");
+    }
   };
 
   const sortedTranscripts = useMemo(
-    () => transcripts.sort((a, b) => b.timestamp - a.timestamp),
+    () => [...transcripts].sort((a, b) => b.timestamp - a.timestamp),
     [transcripts]
   );
 
   return (
     <main className="layout">
       <header className="panel">
-        <h1>Family Translation Room</h1>
+        <div className="headerRow">
+          <h1>Family Translation Room</h1>
+          <button onClick={copyDebugBlob}>Copy Debug Blob</button>
+        </div>
         <p>Private EN ↔ JA speech-to-text translator with provider controls.</p>
         <p className={networkOnline ? "ok" : "warn"}>{networkOnline ? "Online" : "Offline"}</p>
       </header>
@@ -334,7 +508,14 @@ function App() {
           <button onClick={submitTurn} disabled={!connected || !textInput.trim()}>
             Send utterance
           </button>
+          <button onClick={toggleAutoPilot} disabled={!connected}>
+            {autoPilotEnabled ? "Stop simulator" : "Start simulator"}
+          </button>
         </div>
+        <p>
+          Simulator sends random utterances every 15-45 seconds. Messages sent: {autoPilotRuns}
+          {nextAutoDelaySeconds ? ` (next in ~${nextAutoDelaySeconds}s)` : ""}
+        </p>
       </section>
 
       <section className="panel grid2">
