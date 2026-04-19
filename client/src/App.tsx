@@ -56,6 +56,23 @@ const randomDelayMs = () =>
 
 const randomAutoMessage = () => AUTO_MESSAGES[Math.floor(Math.random() * AUTO_MESSAGES.length)];
 
+const getCookie = (name: string): string => {
+  const encodedName = `${encodeURIComponent(name)}=`;
+  const cookieParts = document.cookie.split(";");
+  for (const part of cookieParts) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(encodedName)) {
+      return decodeURIComponent(trimmed.slice(encodedName.length));
+    }
+  }
+  return "";
+};
+
+const setCookie = (name: string, value: string, days = 180) => {
+  const maxAge = days * 24 * 60 * 60;
+  document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; SameSite=Lax`;
+};
+
 function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const audioQueueRef = useRef<Array<{ payloadBase64: string; isLast: boolean }>>([]);
@@ -63,8 +80,8 @@ function App() {
   const autopilotTimeoutRef = useRef<number | null>(null);
   const autoPilotEnabledRef = useRef(false);
   const debugEventsRef = useRef<string[]>([]);
-  const [roomId, setRoomId] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [roomId, setRoomId] = useState(() => getCookie("family_translation_room_id"));
+  const [displayName, setDisplayName] = useState(() => getCookie("family_translation_display_name"));
   const [language, setLanguage] = useState<SupportedLanguage>("en");
   const [contextNotes, setContextNotes] = useState("");
   const [hearAudio, setHearAudio] = useState(true);
@@ -158,6 +175,18 @@ function App() {
   useEffect(() => {
     autoPilotEnabledRef.current = autoPilotEnabled;
   }, [autoPilotEnabled]);
+
+  useEffect(() => {
+    if (roomId.trim()) {
+      setCookie("family_translation_room_id", roomId.trim().toUpperCase());
+    }
+  }, [roomId]);
+
+  useEffect(() => {
+    if (displayName.trim()) {
+      setCookie("family_translation_display_name", displayName.trim());
+    }
+  }, [displayName]);
 
   const sendTurn = (messageText: string, source: "manual" | "autopilot") => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !messageText.trim() || !connected) {
