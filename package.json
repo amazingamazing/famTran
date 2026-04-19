@@ -1,0 +1,29 @@
+{
+  "name": "family-translation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private family translation app monorepo",
+  "scripts": {
+    "dev:client": "npm run dev --workspace client",
+    "dev:server": "npm run dev --workspace server",
+    "build": "npm run build --workspace shared && npm run build --workspace server && npm run build --workspace client",
+    "test": "npm run test --workspace shared && npm run test --workspace server && npm run test --workspace client",
+    "lint": "npm run lint --workspace server && npm run lint --workspace client"
+  },
+  "workspaces": [
+    "client",
+    "server",
+    "shared"
+  ],
+  "keywords": [
+    "translation",
+    "realtime",
+    "pwa"
+  ],
+  "author": "Family Translation",
+  "license": "ISC",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  }
+}

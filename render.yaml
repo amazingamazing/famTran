@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: family-translation-server
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: npm run start --workspace server
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: DATABASE_PATH
+        value: /data/family-translation.sqlite
+      - key: STT_PROVIDER
+        value: deepgram
+      - key: TRANSLATION_PROVIDER
+        value: gemini
+      - key: TTS_PROVIDER
+        value: cartesia
+    disk:
+      name: translation-data
+      mountPath: /data
+      sizeGB: 1
