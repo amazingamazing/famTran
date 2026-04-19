@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["favicon.svg"],
+      includeAssets: ["favicon.svg", "anacorn.png"],
       manifest: {
         name: "Family Translation",
         short_name: "FamTranslate",
@@ -17,9 +17,10 @@ export default defineConfig({
         theme_color: "#111827",
         icons: [
           {
-            src: "favicon.svg",
-            sizes: "192x192",
-            type: "image/svg+xml"
+            src: "anacorn.png",
+            sizes: "1024x1024",
+            type: "image/png",
+            purpose: "any maskable"
           }
         ]
       },
