@@ -73,6 +73,29 @@ const setCookie = (name: string, value: string, days = 180) => {
   document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; SameSite=Lax`;
 };
 
+const getCookieBoolean = (name: string, fallback: boolean) => {
+  const raw = getCookie(name);
+  if (raw === "true") {
+    return true;
+  }
+  if (raw === "false") {
+    return false;
+  }
+  return fallback;
+};
+
+const cookieLanguage = getCookie("family_translation_language");
+const initialLanguage: SupportedLanguage = cookieLanguage === "ja" ? "ja" : "en";
+
+const cookieProviderStt = getCookie("family_translation_provider_stt");
+const initialProviderStt: ProviderType = cookieProviderStt === "openai" ? "openai" : "deepgram";
+
+const cookieProviderTranslation = getCookie("family_translation_provider_translation");
+const initialProviderTranslation: ProviderType = cookieProviderTranslation === "openai" ? "openai" : "gemini";
+
+const cookieProviderTts = getCookie("family_translation_provider_tts");
+const initialProviderTts: ProviderType = cookieProviderTts === "openai" ? "openai" : "cartesia";
+
 function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const audioQueueRef = useRef<Array<{ payloadBase64: string; isLast: boolean }>>([]);
@@ -82,16 +105,16 @@ function App() {
   const debugEventsRef = useRef<string[]>([]);
   const [roomId, setRoomId] = useState(() => getCookie("family_translation_room_id"));
   const [displayName, setDisplayName] = useState(() => getCookie("family_translation_display_name"));
-  const [language, setLanguage] = useState<SupportedLanguage>("en");
-  const [contextNotes, setContextNotes] = useState("");
-  const [hearAudio, setHearAudio] = useState(true);
+  const [language, setLanguage] = useState<SupportedLanguage>(initialLanguage);
+  const [contextNotes, setContextNotes] = useState(() => getCookie("family_translation_context_notes"));
+  const [hearAudio, setHearAudio] = useState(() => getCookieBoolean("family_translation_hear_audio", true));
   const [connected, setConnected] = useState(false);
   const [clientId, setClientId] = useState("");
   const [textInput, setTextInput] = useState("");
   const [transcripts, setTranscripts] = useState<TranscriptRow[]>([]);
-  const [providerStt, setProviderStt] = useState<ProviderType>("deepgram");
-  const [providerTranslation, setProviderTranslation] = useState<ProviderType>("gemini");
-  const [providerTts, setProviderTts] = useState<ProviderType>("cartesia");
+  const [providerStt, setProviderStt] = useState<ProviderType>(initialProviderStt);
+  const [providerTranslation, setProviderTranslation] = useState<ProviderType>(initialProviderTranslation);
+  const [providerTts, setProviderTts] = useState<ProviderType>(initialProviderTts);
   const [correctionWrong, setCorrectionWrong] = useState("");
   const [correctionRight, setCorrectionRight] = useState("");
   const [correctionContext, setCorrectionContext] = useState("");
@@ -187,6 +210,30 @@ function App() {
       setCookie("family_translation_display_name", displayName.trim());
     }
   }, [displayName]);
+
+  useEffect(() => {
+    setCookie("family_translation_language", language);
+  }, [language]);
+
+  useEffect(() => {
+    setCookie("family_translation_hear_audio", String(hearAudio));
+  }, [hearAudio]);
+
+  useEffect(() => {
+    setCookie("family_translation_context_notes", contextNotes);
+  }, [contextNotes]);
+
+  useEffect(() => {
+    setCookie("family_translation_provider_stt", providerStt);
+  }, [providerStt]);
+
+  useEffect(() => {
+    setCookie("family_translation_provider_translation", providerTranslation);
+  }, [providerTranslation]);
+
+  useEffect(() => {
+    setCookie("family_translation_provider_tts", providerTts);
+  }, [providerTts]);
 
   const sendTurn = (messageText: string, source: "manual" | "autopilot") => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !messageText.trim() || !connected) {
@@ -432,6 +479,10 @@ function App() {
     autoPilotEnabledRef.current = true;
     addDebugEvent("autopilot.enabled");
     clearAutoPilotTimer();
+    const sent = sendTurn(randomAutoMessage(), "autopilot");
+    if (sent) {
+      setAutoPilotRuns((previous) => previous + 1);
+    }
     scheduleAutoPilot();
   };
 
