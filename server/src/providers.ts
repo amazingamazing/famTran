@@ -142,75 +142,74 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
 
       const modelsToTry = [this.secrets.geminiModel ?? "gemini-2.5-flash", "gemini-2.0-flash"];
       for (const model of modelsToTry) {
-        try {
-          const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.secrets.geminiApiKey}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                contents: [{ role: "user", parts: [{ text: prompt }] }]
-              })
+        let lastStatus = 0;
+        let lastDetail = "";
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            const response = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.secrets.geminiApiKey}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  contents: [{ role: "user", parts: [{ text: prompt }] }]
+                })
+              }
+            );
+            if (!response.ok) {
+              lastStatus = response.status;
+              const responseText = await response.text();
+              lastDetail = `model=${model} status=${response.status} body=${responseText.slice(0, 180)}`;
+              if (response.status === 429 || response.status >= 500) {
+                const waitMs = 300 * attempt;
+                await new Promise((resolve) => setTimeout(resolve, waitMs));
+                continue;
+              }
+              break;
             }
-          );
-          if (!response.ok) {
-            const detail = `model=${model} status=${response.status}`;
-            // Keep trying fallback model before returning.
-            if (model === modelsToTry[modelsToTry.length - 1]) {
-              return { value: args.sourceText, path: "translation.gemini_http_error", detail };
+            const payload = (await response.json()) as {
+              candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+            };
+            const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
+            if (text) {
+              return { value: text, path: `translation.gemini_api:${model}` };
             }
-            continue;
+            lastDetail = `model=${model} empty_candidate`;
+          } catch {
+            lastDetail = `model=${model} exception`;
+            const waitMs = 300 * attempt;
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
           }
-          const payload = (await response.json()) as {
-            candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        }
+
+        // Try OpenAI as rescue path when Gemini key exists but quota/rate errors continue.
+        if ((lastStatus === 429 || lastStatus >= 500) && this.secrets.openAiApiKey) {
+          const rescue = await this.translateWithOpenAi(args);
+          if (rescue) {
+            return {
+              value: rescue,
+              path: "translation.openai_fallback_after_gemini_error",
+              detail: lastDetail
+            };
+          }
+        }
+
+        if (model === modelsToTry[modelsToTry.length - 1]) {
+          return {
+            value: args.sourceText,
+            path: lastStatus ? "translation.gemini_http_error" : "translation.gemini_empty_or_exception",
+            detail: lastDetail || `model=${model}`
           };
-          const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
-          if (text) {
-            return { value: text, path: `translation.gemini_api:${model}` };
-          }
-          if (model === modelsToTry[modelsToTry.length - 1]) {
-            return { value: args.sourceText, path: "translation.gemini_empty", detail: `model=${model}` };
-          }
-        } catch {
-          if (model === modelsToTry[modelsToTry.length - 1]) {
-            return { value: args.sourceText, path: "translation.gemini_exception", detail: `model=${model}` };
-          }
         }
       }
     }
 
     if (this.providers.translation === "openai" && this.secrets.openAiApiKey) {
-      try {
-        const response = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.secrets.openAiApiKey}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: "gpt-4.1-mini",
-            temperature: 0.2,
-            messages: [
-              {
-                role: "system",
-                content: `Translate from ${args.sourceLanguage} to ${args.targetLanguage}. Output translation only.`
-              },
-              { role: "user", content: args.sourceText }
-            ]
-          })
-        });
-        if (response.ok) {
-          const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-          const text = payload.choices?.[0]?.message?.content?.trim();
-          if (text && text.length > 0) {
-            return { value: text, path: "translation.openai_api" };
-          }
-          return { value: args.sourceText, path: "translation.openai_empty" };
-        }
-        return { value: args.sourceText, path: "translation.openai_http_error", detail: `status=${response.status}` };
-      } catch {
-        return { value: args.sourceText, path: "translation.openai_exception" };
+      const translated = await this.translateWithOpenAi(args);
+      if (translated) {
+        return { value: translated, path: "translation.openai_api" };
       }
+      return { value: args.sourceText, path: "translation.openai_error" };
     }
 
     return { value: args.sourceText, path: "translation.passthrough" };
@@ -277,6 +276,44 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
     }
 
     return { value: Buffer.from(args.text).toString("base64"), path: "tts.passthrough_text_base64" };
+  }
+
+  private async translateWithOpenAi(args: {
+    sourceText: string;
+    sourceLanguage: SupportedLanguage;
+    targetLanguage: SupportedLanguage;
+  }): Promise<string | null> {
+    if (!this.secrets.openAiApiKey) {
+      return null;
+    }
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.secrets.openAiApiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "gpt-4.1-mini",
+          temperature: 0.2,
+          messages: [
+            {
+              role: "system",
+              content: `Translate from ${args.sourceLanguage} to ${args.targetLanguage}. Output translation only.`
+            },
+            { role: "user", content: args.sourceText }
+          ]
+        })
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      const text = payload.choices?.[0]?.message?.content?.trim();
+      return text && text.length > 0 ? text : null;
+    } catch {
+      return null;
+    }
   }
 }
 
