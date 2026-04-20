@@ -141,6 +141,7 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
       ].join("\n");
 
       const modelsToTry = [this.secrets.geminiModel ?? "gemini-2.5-flash", "gemini-2.0-flash"];
+      let geminiFailureDetail = "unknown";
       for (const model of modelsToTry) {
         let lastStatus = 0;
         let lastDetail = "";
@@ -160,6 +161,7 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
               lastStatus = response.status;
               const responseText = await response.text();
               lastDetail = `model=${model} status=${response.status} body=${responseText.slice(0, 180)}`;
+              geminiFailureDetail = lastDetail;
               if (response.status === 429 || response.status >= 500) {
                 const waitMs = 300 * attempt;
                 await new Promise((resolve) => setTimeout(resolve, waitMs));
@@ -175,33 +177,36 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
               return { value: text, path: `translation.gemini_api:${model}` };
             }
             lastDetail = `model=${model} empty_candidate`;
+            geminiFailureDetail = lastDetail;
           } catch {
             lastDetail = `model=${model} exception`;
+            geminiFailureDetail = lastDetail;
             const waitMs = 300 * attempt;
             await new Promise((resolve) => setTimeout(resolve, waitMs));
           }
         }
 
-        // Try OpenAI as rescue path when Gemini key exists but quota/rate errors continue.
-        if ((lastStatus === 429 || lastStatus >= 500) && this.secrets.openAiApiKey) {
-          const rescue = await this.translateWithOpenAi(args);
-          if (rescue) {
-            return {
-              value: rescue,
-              path: "translation.openai_fallback_after_gemini_error",
-              detail: lastDetail
-            };
-          }
-        }
-
         if (model === modelsToTry[modelsToTry.length - 1]) {
+          break;
+        }
+      }
+
+      if (this.secrets.openAiApiKey) {
+        const rescue = await this.translateWithOpenAi(args);
+        if (rescue) {
           return {
-            value: args.sourceText,
-            path: lastStatus ? "translation.gemini_http_error" : "translation.gemini_empty_or_exception",
-            detail: lastDetail || `model=${model}`
+            value: rescue,
+            path: "translation.openai_fallback_after_gemini_error",
+            detail: geminiFailureDetail
           };
         }
       }
+
+      return {
+        value: args.sourceText,
+        path: "translation.gemini_http_error",
+        detail: geminiFailureDetail
+      };
     }
 
     if (this.providers.translation === "openai" && this.secrets.openAiApiKey) {
