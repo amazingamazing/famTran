@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ProviderType, SupportedLanguage } from "@family-translation/shared";
+import type { ProviderType, ServerEvent, SupportedLanguage } from "@family-translation/shared";
 
 import "./App.css";
 import { parseEvent } from "./lib/parse-event";
@@ -21,6 +21,8 @@ type TranscriptRow = {
   };
 };
 
+type DebugTurnRow = Extract<ServerEvent, { type: "debug.turn" }>;
+
 const WS_BASE_URL =
   window.location.hostname === "localhost"
     ? "ws://localhost:8787"
@@ -37,6 +39,7 @@ const encodeStringAsBase64 = (value: string) => btoa(unescape(encodeURIComponent
 const AUTOPILOT_MIN_MS = 15_000;
 const AUTOPILOT_MAX_MS = 45_000;
 const MAX_DEBUG_EVENTS = 120;
+const MAX_DEBUG_TURNS = 80;
 
 const AUTO_MESSAGES_EN = [
   "How is everyone feeling this afternoon?",
@@ -162,6 +165,7 @@ function App() {
   const autopilotTimeoutRef = useRef<number | null>(null);
   const autoPilotEnabledRef = useRef(false);
   const debugEventsRef = useRef<string[]>([]);
+  const debugTurnsRef = useRef<DebugTurnRow[]>([]);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micAudioContextRef = useRef<AudioContext | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -438,6 +442,16 @@ function App() {
         addDebugEvent(`audio.chunk turn=${event.turnId} last=${event.isLast}`);
         return;
       }
+      if (event.type === "debug.turn") {
+        debugTurnsRef.current = [event, ...debugTurnsRef.current].slice(0, MAX_DEBUG_TURNS);
+        const participantSummary = event.participants
+          .map((participant) => `${participant.displayName}:${participant.targetLanguage}`)
+          .join(",");
+        addDebugEvent(
+          `debug.turn turn=${event.turnId} stt=${event.transcription.path} participants=${participantSummary}`
+        );
+        return;
+      }
       if (event.type === "error") {
         setStatusMessage(event.message);
         addDebugEvent(`server.error message=${event.message}`);
@@ -698,6 +712,7 @@ function App() {
         originalText: item.originalText,
         debug: item.debug
       })),
+      recentRoomDebugTurns: debugTurnsRef.current.slice(0, 20),
       recentEvents: debugEventsRef.current
     };
 

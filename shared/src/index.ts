@@ -47,6 +47,32 @@ export type ServerEvent =
   | {
       type: "error";
       message: string;
+    }
+  | {
+      type: "debug.turn";
+      turnId: string;
+      roomId: string;
+      speakerId: string;
+      sourceLanguage: SupportedLanguage;
+      originalText: string;
+      timestamp: number;
+      transcription: {
+        path: string;
+        detail?: string;
+        audioChunkCount: number;
+        textHintCount: number;
+      };
+      participants: Array<{
+        clientId: string;
+        displayName: string;
+        targetLanguage: SupportedLanguage;
+        isSpeaker: boolean;
+        hearAudio: boolean;
+        translatedText: string;
+        translationPath: string;
+        translationDetail?: string;
+        ttsPath?: string;
+      }>;
     };
 
 export type ClientEvent =

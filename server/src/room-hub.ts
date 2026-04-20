@@ -193,7 +193,7 @@ export class RoomHub {
     const recentTurns = this.db.latestTurns(turn.roomId);
 
     const participants = [...room.participants.values()];
-    await Promise.all(
+    const participantDebugRows = await Promise.all(
       participants.map(async (participant) => {
         const targetLanguage = participant.language;
         const translation =
@@ -250,8 +250,37 @@ export class RoomHub {
             speakerId: sourceSpeaker.clientId
           });
         }
+
+        return {
+          clientId: participant.clientId,
+          displayName: participant.displayName,
+          targetLanguage,
+          isSpeaker: participant.clientId === turn.speakerId,
+          hearAudio: participant.hearAudio,
+          translatedText,
+          translationPath: translation.path,
+          translationDetail: translation.detail,
+          ttsPath: shouldSynthesize ? "tts.deferred" : undefined
+        };
       })
     );
+
+    this.broadcastToAll({
+      type: "debug.turn",
+      turnId,
+      roomId: turn.roomId,
+      speakerId: sourceSpeaker.clientId,
+      sourceLanguage: turn.sourceLanguage,
+      originalText: sourceText,
+      timestamp: Date.now(),
+      transcription: {
+        path: transcription.path,
+        detail: transcription.detail,
+        audioChunkCount: turn.audioChunks.length,
+        textHintCount: turn.textChunks.length
+      },
+      participants: participantDebugRows
+    });
     this.activeTurns.delete(turnId);
   }
 

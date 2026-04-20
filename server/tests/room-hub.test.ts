@@ -233,5 +233,68 @@ describe("RoomHub", () => {
     const lateAudio = lateEvents.find((event) => event.type === "audio.chunk");
     expect(lateAudio).toBeDefined();
   });
+
+  it("broadcasts room-level debug turn details to all participants", async () => {
+    const enSocket = new MockSocket();
+    const jaSocket = new MockSocket();
+    const enClientId = hub.join(enSocket as never, {
+      type: "session.join",
+      roomId: "ROOM42",
+      displayName: "Alex",
+      language: "en",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+
+    hub.join(jaSocket as never, {
+      type: "session.join",
+      roomId: "ROOM42",
+      displayName: "Yuki",
+      language: "ja",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+
+    await hub.handleEvent(enClientId, {
+      type: "turn.start",
+      turnId: "turn-debug",
+      roomId: "ROOM42",
+      speakerLanguage: "en"
+    });
+    await hub.handleEvent(enClientId, {
+      type: "audio.input",
+      turnId: "turn-debug",
+      roomId: "ROOM42",
+      payloadBase64: Buffer.from("Hello family").toString("base64"),
+      sequence: 0,
+      isLast: true
+    });
+    await hub.handleEvent(enClientId, {
+      type: "turn.stop",
+      turnId: "turn-debug",
+      roomId: "ROOM42"
+    });
+
+    const enDebugTurn = enSocket.sent
+      .map((item) => JSON.parse(item))
+      .find((event) => event.type === "debug.turn");
+    const jaDebugTurn = jaSocket.sent
+      .map((item) => JSON.parse(item))
+      .find((event) => event.type === "debug.turn");
+
+    expect(enDebugTurn).toBeDefined();
+    expect(jaDebugTurn).toBeDefined();
+    expect(enDebugTurn.turnId).toBe("turn-debug");
+    expect(enDebugTurn.originalText).toBe("Hello family");
+    expect(enDebugTurn.participants).toHaveLength(2);
+    expect(enDebugTurn.participants.some((entry: { targetLanguage: string }) => entry.targetLanguage === "en")).toBe(
+      true
+    );
+    expect(enDebugTurn.participants.some((entry: { targetLanguage: string }) => entry.targetLanguage === "ja")).toBe(
+      true
+    );
+  });
 });
 
