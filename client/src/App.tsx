@@ -112,6 +112,49 @@ const initialProviderTranslation: ProviderType = cookieProviderTranslation === "
 const cookieProviderTts = getCookie("family_translation_provider_tts");
 const initialProviderTts: ProviderType = cookieProviderTts === "openai" ? "openai" : "cartesia";
 
+const downsampleTo16k = (input: Float32Array, inputSampleRate: number): Float32Array => {
+  if (inputSampleRate === 16000) {
+    return input;
+  }
+  const ratio = inputSampleRate / 16000;
+  const outputLength = Math.round(input.length / ratio);
+  const output = new Float32Array(outputLength);
+  let outputIndex = 0;
+  let inputIndex = 0;
+
+  while (outputIndex < outputLength) {
+    const nextInputIndex = Math.round((outputIndex + 1) * ratio);
+    let accumulator = 0;
+    let count = 0;
+    for (let index = inputIndex; index < nextInputIndex && index < input.length; index += 1) {
+      accumulator += input[index];
+      count += 1;
+    }
+    output[outputIndex] = count > 0 ? accumulator / count : 0;
+    outputIndex += 1;
+    inputIndex = nextInputIndex;
+  }
+
+  return output;
+};
+
+const floatToPcm16 = (input: Float32Array): Int16Array => {
+  const output = new Int16Array(input.length);
+  for (let i = 0; i < input.length; i += 1) {
+    const sample = Math.max(-1, Math.min(1, input[i]));
+    output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+  return output;
+};
+
+const uint8ToBase64 = (bytes: Uint8Array): string => {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+};
+
 function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const audioQueueRef = useRef<Array<{ payloadBase64: string; isLast: boolean }>>([]);
@@ -119,6 +162,12 @@ function App() {
   const autopilotTimeoutRef = useRef<number | null>(null);
   const autoPilotEnabledRef = useRef(false);
   const debugEventsRef = useRef<string[]>([]);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const micAudioContextRef = useRef<AudioContext | null>(null);
+  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const micTurnIdRef = useRef<string | null>(null);
+  const micSequenceRef = useRef(0);
   const [roomId, setRoomId] = useState(() => getCookie("family_translation_room_id"));
   const [displayName, setDisplayName] = useState(() => getCookie("family_translation_display_name"));
   const [language, setLanguage] = useState<SupportedLanguage>(initialLanguage);
@@ -142,6 +191,7 @@ function App() {
   const [autoPilotEnabled, setAutoPilotEnabled] = useState(false);
   const [autoPilotRuns, setAutoPilotRuns] = useState(0);
   const [nextAutoDelaySeconds, setNextAutoDelaySeconds] = useState<number | null>(null);
+  const [micTestActive, setMicTestActive] = useState(false);
 
   const addDebugEvent = (message: string) => {
     const entry = `${new Date().toISOString()} ${message}`;
@@ -412,8 +462,117 @@ function App() {
     clearAutoPilotTimer();
     autoPilotEnabledRef.current = false;
     setAutoPilotEnabled(false);
+    void stopMicTest();
     wsRef.current?.close();
     wsRef.current = null;
+  };
+
+  const stopMicTest = async () => {
+    if (!micTestActive && !micTurnIdRef.current) {
+      return;
+    }
+
+    micProcessorRef.current?.disconnect();
+    micSourceRef.current?.disconnect();
+    micProcessorRef.current = null;
+    micSourceRef.current = null;
+
+    micStreamRef.current?.getTracks().forEach((track) => track.stop());
+    micStreamRef.current = null;
+
+    if (micAudioContextRef.current) {
+      await micAudioContextRef.current.close();
+      micAudioContextRef.current = null;
+    }
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && micTurnIdRef.current) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "turn.stop",
+          turnId: micTurnIdRef.current,
+          roomId: roomId.trim().toUpperCase()
+        })
+      );
+    }
+
+    addDebugEvent(`mic.stop turn=${micTurnIdRef.current ?? "n/a"}`);
+    micTurnIdRef.current = null;
+    setMicTestActive(false);
+  };
+
+  const startMicTest = async () => {
+    if (!connected || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setStatusMessage("Connect first before starting mic test.");
+      return;
+    }
+    if (micTestActive) {
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+      const turnId = createTurnId();
+      micTurnIdRef.current = turnId;
+      micSequenceRef.current = 0;
+
+      wsRef.current.send(
+        JSON.stringify({
+          type: "turn.start",
+          turnId,
+          roomId: roomId.trim().toUpperCase(),
+          speakerLanguage: language
+        })
+      );
+
+      processor.onaudioprocess = (event) => {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !micTurnIdRef.current) {
+          return;
+        }
+        const input = event.inputBuffer.getChannelData(0);
+        const downsampled = downsampleTo16k(input, audioContext.sampleRate);
+        const pcm16 = floatToPcm16(downsampled);
+        const payloadBase64 = uint8ToBase64(new Uint8Array(pcm16.buffer));
+
+        wsRef.current.send(
+          JSON.stringify({
+            type: "audio.input",
+            turnId: micTurnIdRef.current,
+            roomId: roomId.trim().toUpperCase(),
+            payloadBase64,
+            sequence: micSequenceRef.current,
+            isLast: false
+          })
+        );
+        micSequenceRef.current += 1;
+      };
+
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+
+      micStreamRef.current = stream;
+      micAudioContextRef.current = audioContext;
+      micSourceRef.current = source;
+      micProcessorRef.current = processor;
+      setMicTestActive(true);
+      addDebugEvent(`mic.start turn=${turnId} sampleRate=${audioContext.sampleRate}`);
+      setStatusMessage("Mic test started. Speak, then stop mic test to submit turn.");
+    } catch {
+      setStatusMessage("Mic access failed. Check browser microphone permissions.");
+      addDebugEvent("mic.start.failed");
+      await stopMicTest();
+    }
   };
 
   const submitTurn = () => {
@@ -619,11 +778,19 @@ function App() {
           <button onClick={toggleAutoPilot} disabled={!connected}>
             {autoPilotEnabled ? "Stop simulator" : "Start simulator"}
           </button>
+          {!micTestActive ? (
+            <button onClick={() => void startMicTest()} disabled={!connected}>
+              Start mic test
+            </button>
+          ) : (
+            <button onClick={() => void stopMicTest()}>Stop mic test</button>
+          )}
         </div>
         <p>
           Simulator sends random utterances every 15-45 seconds. Messages sent: {autoPilotRuns}
           {nextAutoDelaySeconds ? ` (next in ~${nextAutoDelaySeconds}s)` : ""}
         </p>
+        <p>Mic test state: {micTestActive ? "capturing audio" : "idle"}</p>
       </section>
 
       <section className="panel grid2">
