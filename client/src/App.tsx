@@ -3,6 +3,11 @@ import type { ProviderType, ServerEvent, SupportedLanguage } from "@family-trans
 
 import "./App.css";
 import { parseEvent } from "./lib/parse-event";
+import {
+  readControlsExpandedPreference,
+  shouldAutoConnectFromSavedSession,
+  writeControlsExpandedPreference
+} from "./lib/session-ui";
 
 type TranscriptRow = {
   turnId: string;
@@ -172,6 +177,8 @@ function App() {
   const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const micTurnIdRef = useRef<string | null>(null);
   const micSequenceRef = useRef(0);
+  const autoConnectAttemptedRef = useRef(false);
+  const connectRef = useRef<() => void>(() => undefined);
   const [roomId, setRoomId] = useState(() => getCookie("family_translation_room_id"));
   const [displayName, setDisplayName] = useState(() => getCookie("family_translation_display_name"));
   const [language, setLanguage] = useState<SupportedLanguage>(initialLanguage);
@@ -196,6 +203,12 @@ function App() {
   const [autoPilotRuns, setAutoPilotRuns] = useState(0);
   const [nextAutoDelaySeconds, setNextAutoDelaySeconds] = useState<number | null>(null);
   const [micTestActive, setMicTestActive] = useState(false);
+  const [controlsExpanded, setControlsExpanded] = useState(() =>
+    readControlsExpandedPreference(
+      window.localStorage,
+      !(getCookie("family_translation_room_id").trim() && getCookie("family_translation_display_name").trim())
+    )
+  );
 
   const addDebugEvent = (message: string) => {
     const entry = `${new Date().toISOString()} ${message}`;
@@ -304,6 +317,10 @@ function App() {
   useEffect(() => {
     setCookie("family_translation_provider_tts", providerTts);
   }, [providerTts]);
+
+  useEffect(() => {
+    writeControlsExpandedPreference(window.localStorage, controlsExpanded);
+  }, [controlsExpanded]);
 
   const sendTurn = (messageText: string, source: "manual" | "autopilot") => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !messageText.trim() || !connected) {
@@ -471,6 +488,25 @@ function App() {
       addDebugEvent("socket.error");
     };
   };
+
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
+  useEffect(() => {
+    const shouldAutoConnect = shouldAutoConnectFromSavedSession({
+      roomId,
+      displayName,
+      connected,
+      alreadyAttempted: autoConnectAttemptedRef.current
+    });
+    if (!shouldAutoConnect) {
+      return;
+    }
+    autoConnectAttemptedRef.current = true;
+    addDebugEvent("session.auto_connect.attempt");
+    connectRef.current();
+  }, [connected, displayName, roomId]);
 
   const disconnect = () => {
     clearAutoPilotTimer();
@@ -736,44 +772,75 @@ function App() {
       <header className="panel">
         <div className="headerRow">
           <h1>Family Translation Room</h1>
-          <button onClick={copyDebugBlob}>Copy Debug Blob</button>
+          <div className="actions">
+            <button onClick={() => setControlsExpanded((previous) => !previous)}>
+              {controlsExpanded ? "Compact view" : "Show controls"}
+            </button>
+            <button onClick={copyDebugBlob}>Copy Debug Blob</button>
+          </div>
         </div>
         <p>Private EN ↔ JA speech-to-text translator with provider controls.</p>
         <p className={networkOnline ? "ok" : "warn"}>{networkOnline ? "Online" : "Offline"}</p>
       </header>
 
-      <section className="panel grid2">
-        <label>
-          Room code
-          <input value={roomId} onChange={(event) => setRoomId(event.target.value)} placeholder="ABC123" />
-        </label>
-        <label>
-          Display name
-          <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Alex" />
-        </label>
-        <label>
-          Language
-          <select value={language} onChange={(event) => setLanguage(event.target.value as SupportedLanguage)}>
-            <option value="en">English</option>
-            <option value="ja">Japanese</option>
-          </select>
-        </label>
-        <label>
-          Hear translated audio cue
-          <input type="checkbox" checked={hearAudio} onChange={(event) => setHearAudio(event.target.checked)} />
-        </label>
-        <label className="full">
-          Context notes (people, terms, pronunciation hints)
-          <textarea value={contextNotes} onChange={(event) => setContextNotes(event.target.value)} rows={2} />
-        </label>
-        <div className="actions">
-          <button onClick={connect} disabled={connected}>
-            Connect
-          </button>
-          <button onClick={disconnect}>Disconnect</button>
-        </div>
-        <p className="full">{statusMessage}</p>
-      </section>
+      {controlsExpanded ? (
+        <section className="panel grid2">
+          <label>
+            Room code
+            <input value={roomId} onChange={(event) => setRoomId(event.target.value)} placeholder="ABC123" />
+          </label>
+          <label>
+            Display name
+            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Alex" />
+          </label>
+          <label>
+            Language
+            <select value={language} onChange={(event) => setLanguage(event.target.value as SupportedLanguage)}>
+              <option value="en">English</option>
+              <option value="ja">Japanese</option>
+            </select>
+          </label>
+          <label>
+            Hear translated audio cue
+            <input type="checkbox" checked={hearAudio} onChange={(event) => setHearAudio(event.target.checked)} />
+          </label>
+          <label className="full">
+            Context notes (people, terms, pronunciation hints)
+            <textarea value={contextNotes} onChange={(event) => setContextNotes(event.target.value)} rows={2} />
+          </label>
+          <div className="actions">
+            <button onClick={connect} disabled={connected}>
+              Connect
+            </button>
+            <button onClick={disconnect}>Disconnect</button>
+          </div>
+          <p className="full">{statusMessage}</p>
+        </section>
+      ) : (
+        <section className="panel compactSessionPanel">
+          <div className="compactSessionTop">
+            <span>
+              <strong>Room:</strong> {roomId.trim().toUpperCase() || "(not set)"}
+            </span>
+            <span>
+              <strong>Name:</strong> {displayName.trim() || "(not set)"}
+            </span>
+            <span>
+              <strong>Language:</strong> {language.toUpperCase()}
+            </span>
+            <span>
+              <strong>Audio cue:</strong> {hearAudio ? "on" : "off"}
+            </span>
+          </div>
+          <div className="actions">
+            <button onClick={connect} disabled={connected}>
+              Connect
+            </button>
+            <button onClick={disconnect}>Disconnect</button>
+          </div>
+          <p>{statusMessage}</p>
+        </section>
+      )}
 
       <section className="panel">
         <h2>Live Speech-to-Text</h2>
@@ -808,77 +875,81 @@ function App() {
         <p>Mic test state: {micTestActive ? "capturing audio" : "idle"}</p>
       </section>
 
-      <section className="panel grid2">
-        <div>
-          <h2>Glossary Entry</h2>
-          <label>
-            Term
-            <input value={manualTerm} onChange={(event) => setManualTerm(event.target.value)} />
-          </label>
-          <label>
-            Translation
-            <input value={manualTranslation} onChange={(event) => setManualTranslation(event.target.value)} />
-          </label>
-          <label>
-            Notes
-            <input value={manualNotes} onChange={(event) => setManualNotes(event.target.value)} />
-          </label>
-          <button onClick={saveGlossary} disabled={!connected}>
-            Save glossary
-          </button>
-        </div>
-        <div>
-          <h2>Correction Feedback</h2>
-          <label>
-            Wrong output
-            <input value={correctionWrong} onChange={(event) => setCorrectionWrong(event.target.value)} />
-          </label>
-          <label>
-            Correct output
-            <input value={correctionRight} onChange={(event) => setCorrectionRight(event.target.value)} />
-          </label>
-          <label>
-            Context
-            <input value={correctionContext} onChange={(event) => setCorrectionContext(event.target.value)} />
-          </label>
-          <button onClick={submitCorrection} disabled={!connected}>
-            Submit correction
-          </button>
-        </div>
-      </section>
+      {controlsExpanded ? (
+        <>
+          <section className="panel grid2">
+            <div>
+              <h2>Glossary Entry</h2>
+              <label>
+                Term
+                <input value={manualTerm} onChange={(event) => setManualTerm(event.target.value)} />
+              </label>
+              <label>
+                Translation
+                <input value={manualTranslation} onChange={(event) => setManualTranslation(event.target.value)} />
+              </label>
+              <label>
+                Notes
+                <input value={manualNotes} onChange={(event) => setManualNotes(event.target.value)} />
+              </label>
+              <button onClick={saveGlossary} disabled={!connected}>
+                Save glossary
+              </button>
+            </div>
+            <div>
+              <h2>Correction Feedback</h2>
+              <label>
+                Wrong output
+                <input value={correctionWrong} onChange={(event) => setCorrectionWrong(event.target.value)} />
+              </label>
+              <label>
+                Correct output
+                <input value={correctionRight} onChange={(event) => setCorrectionRight(event.target.value)} />
+              </label>
+              <label>
+                Context
+                <input value={correctionContext} onChange={(event) => setCorrectionContext(event.target.value)} />
+              </label>
+              <button onClick={submitCorrection} disabled={!connected}>
+                Submit correction
+              </button>
+            </div>
+          </section>
 
-      <section className="panel grid3">
-        <h2 className="full">Provider Controls (Operator)</h2>
-        <label>
-          STT
-          <select value={providerStt} onChange={(event) => setProviderStt(event.target.value as ProviderType)}>
-            <option value="deepgram">Deepgram</option>
-            <option value="openai">OpenAI</option>
-          </select>
-        </label>
-        <label>
-          Translation
-          <select
-            value={providerTranslation}
-            onChange={(event) => setProviderTranslation(event.target.value as ProviderType)}
-          >
-            <option value="gemini">Gemini</option>
-            <option value="openai">OpenAI</option>
-          </select>
-        </label>
-        <label>
-          TTS
-          <select value={providerTts} onChange={(event) => setProviderTts(event.target.value as ProviderType)}>
-            <option value="cartesia">Cartesia</option>
-            <option value="openai">OpenAI</option>
-          </select>
-        </label>
-        <div className="actions full">
-          <button onClick={saveProviders} disabled={!connected}>
-            Apply providers
-          </button>
-        </div>
-      </section>
+          <section className="panel grid3">
+            <h2 className="full">Provider Controls (Operator)</h2>
+            <label>
+              STT
+              <select value={providerStt} onChange={(event) => setProviderStt(event.target.value as ProviderType)}>
+                <option value="deepgram">Deepgram</option>
+                <option value="openai">OpenAI</option>
+              </select>
+            </label>
+            <label>
+              Translation
+              <select
+                value={providerTranslation}
+                onChange={(event) => setProviderTranslation(event.target.value as ProviderType)}
+              >
+                <option value="gemini">Gemini</option>
+                <option value="openai">OpenAI</option>
+              </select>
+            </label>
+            <label>
+              TTS
+              <select value={providerTts} onChange={(event) => setProviderTts(event.target.value as ProviderType)}>
+                <option value="cartesia">Cartesia</option>
+                <option value="openai">OpenAI</option>
+              </select>
+            </label>
+            <div className="actions full">
+              <button onClick={saveProviders} disabled={!connected}>
+                Apply providers
+              </button>
+            </div>
+          </section>
+        </>
+      ) : null}
 
       <section className="panel">
         <h2>Transcript</h2>
@@ -896,14 +967,16 @@ function App() {
         </ul>
       </section>
 
-      <section className="panel">
-        <h2>iPhone Reliability Checklist</h2>
-        <ul>
-          <li>Install via Add to Home Screen, keep app in foreground while conversing.</li>
-          <li>Disable auto-lock during conversation sessions.</li>
-          <li>If audio stalls, tap Disconnect then Connect to resume session.</li>
-        </ul>
-      </section>
+      {controlsExpanded ? (
+        <section className="panel">
+          <h2>iPhone Reliability Checklist</h2>
+          <ul>
+            <li>Install via Add to Home Screen, keep app in foreground while conversing.</li>
+            <li>Disable auto-lock during conversation sessions.</li>
+            <li>If audio stalls, tap Disconnect then Connect to resume session.</li>
+          </ul>
+        </section>
+      ) : null}
     </main>
   );
 }
