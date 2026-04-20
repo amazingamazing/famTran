@@ -38,7 +38,7 @@ const AUTOPILOT_MIN_MS = 15_000;
 const AUTOPILOT_MAX_MS = 45_000;
 const MAX_DEBUG_EVENTS = 120;
 
-const AUTO_MESSAGES = [
+const AUTO_MESSAGES_EN = [
   "How is everyone feeling this afternoon?",
   "I am going to make tea in a few minutes.",
   "Pepe is sleeping on the couch again.",
@@ -51,10 +51,26 @@ const AUTO_MESSAGES = [
   "The weather looks good for a walk later."
 ];
 
+const AUTO_MESSAGES_JA = [
+  "みんな、今日の午後はどんな気分ですか？",
+  "あとでお茶をいれます。",
+  "ペペはまたソファで寝ています。",
+  "今夜の夕ご飯の予定を決めましょう。",
+  "これから少し買い物に行きます。",
+  "これはレイテンシーテスト用のシミュレーターメッセージです。",
+  "来週の予定について話しましょう。",
+  "イヤホンの充電を忘れないでください。",
+  "再接続がまだうまくいくか確認しています。",
+  "あとで散歩するのに良い天気ですね。"
+];
+
 const randomDelayMs = () =>
   Math.floor(Math.random() * (AUTOPILOT_MAX_MS - AUTOPILOT_MIN_MS + 1)) + AUTOPILOT_MIN_MS;
 
-const randomAutoMessage = () => AUTO_MESSAGES[Math.floor(Math.random() * AUTO_MESSAGES.length)];
+const randomAutoMessage = (language: SupportedLanguage) => {
+  const pool = language === "ja" ? AUTO_MESSAGES_JA : AUTO_MESSAGES_EN;
+  return pool[Math.floor(Math.random() * pool.length)];
+};
 
 const getCookie = (name: string): string => {
   const encodedName = `${encodeURIComponent(name)}=`;
@@ -277,7 +293,7 @@ function App() {
     const delay = randomDelayMs();
     setNextAutoDelaySeconds(Math.round(delay / 1000));
     autopilotTimeoutRef.current = window.setTimeout(() => {
-      const sent = sendTurn(randomAutoMessage(), "autopilot");
+      const sent = sendTurn(randomAutoMessage(language), "autopilot");
       if (sent) {
         setAutoPilotRuns((previous) => previous + 1);
       }
@@ -479,7 +495,7 @@ function App() {
     autoPilotEnabledRef.current = true;
     addDebugEvent("autopilot.enabled");
     clearAutoPilotTimer();
-    const sent = sendTurn(randomAutoMessage(), "autopilot");
+    const sent = sendTurn(randomAutoMessage(language), "autopilot");
     if (sent) {
       setAutoPilotRuns((previous) => previous + 1);
     }
