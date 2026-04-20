@@ -18,6 +18,13 @@ class MockSocket {
   }
 }
 
+class SlowTtsPipeline extends InMemoryProviderPipeline {
+  override async synthesizeSpeech(args: { text: string; targetLanguage: "en" | "ja"; speakerId: string }) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    return super.synthesizeSpeech(args);
+  }
+}
+
 describe("RoomHub", () => {
   let dbDir = "";
   let db: AppDb;
@@ -159,6 +166,72 @@ describe("RoomHub", () => {
 
     const transcriptMessages = jaSocket.sent.map((item) => JSON.parse(item)).filter((event) => event.type === "transcript.chunk");
     expect(transcriptMessages).toHaveLength(0);
+  });
+
+  it("sends transcript before delayed tts audio is ready", async () => {
+    hub = new RoomHub(
+      db,
+      new SlowTtsPipeline({
+        stt: "deepgram",
+        translation: "gemini",
+        tts: "cartesia"
+      })
+    );
+
+    const enSocket = new MockSocket();
+    const jaSocket = new MockSocket();
+    const enClientId = hub.join(enSocket as never, {
+      type: "session.join",
+      roomId: "ROOM42",
+      displayName: "Alex",
+      language: "en",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+
+    hub.join(jaSocket as never, {
+      type: "session.join",
+      roomId: "ROOM42",
+      displayName: "Yuki",
+      language: "ja",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+
+    await hub.handleEvent(enClientId, {
+      type: "turn.start",
+      turnId: "turn-slow-tts",
+      roomId: "ROOM42",
+      speakerLanguage: "en"
+    });
+    await hub.handleEvent(enClientId, {
+      type: "audio.input",
+      turnId: "turn-slow-tts",
+      roomId: "ROOM42",
+      payloadBase64: Buffer.from("Hello family").toString("base64"),
+      sequence: 0,
+      isLast: true
+    });
+
+    await hub.handleEvent(enClientId, {
+      type: "turn.stop",
+      turnId: "turn-slow-tts",
+      roomId: "ROOM42"
+    });
+
+    const earlyEvents = jaSocket.sent.map((item) => JSON.parse(item));
+    const earlyTranscript = earlyEvents.find((event) => event.type === "transcript.chunk");
+    const earlyAudio = earlyEvents.find((event) => event.type === "audio.chunk");
+    expect(earlyTranscript).toBeDefined();
+    expect(earlyAudio).toBeUndefined();
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const lateEvents = jaSocket.sent.map((item) => JSON.parse(item));
+    const lateAudio = lateEvents.find((event) => event.type === "audio.chunk");
+    expect(lateAudio).toBeDefined();
   });
 });
 

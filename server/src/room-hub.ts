@@ -192,74 +192,91 @@ export class RoomHub {
       .map((entry) => `${entry.wrongText} => ${entry.rightText} (${entry.context})`);
     const recentTurns = this.db.latestTurns(turn.roomId);
 
-    for (const participant of room.participants.values()) {
-      const targetLanguage = participant.language;
-      const translation =
-        participant.clientId === turn.speakerId
-          ? {
-              value: sourceText,
-              path: "translation.self_passthrough",
-              detail: "speaker_receives_source_text"
-            }
-          : await this.providers.translateText({
-              sourceText,
-              sourceLanguage: turn.sourceLanguage,
-              targetLanguage,
-              context: { glossaryLines, correctionLines, recentTurns }
-            });
-      const translatedText = translation.value;
-      const speech =
-        participant.clientId !== turn.speakerId && participant.hearAudio
-          ? await this.providers.synthesizeSpeech({
-              text: translatedText,
-              targetLanguage,
-              speakerId: sourceSpeaker.clientId
-            })
-          : null;
+    const participants = [...room.participants.values()];
+    await Promise.all(
+      participants.map(async (participant) => {
+        const targetLanguage = participant.language;
+        const translation =
+          participant.clientId === turn.speakerId
+            ? {
+                value: sourceText,
+                path: "translation.self_passthrough",
+                detail: "speaker_receives_source_text"
+              }
+            : await this.providers.translateText({
+                sourceText,
+                sourceLanguage: turn.sourceLanguage,
+                targetLanguage,
+                context: { glossaryLines, correctionLines, recentTurns }
+              });
+        const translatedText = translation.value;
+        const shouldSynthesize = participant.clientId !== turn.speakerId && participant.hearAudio;
 
-      this.db.insertTurn({
-        roomId: turn.roomId,
-        turnId,
-        speakerId: sourceSpeaker.clientId,
-        sourceLanguage: turn.sourceLanguage,
-        sourceText,
-        targetLanguage,
-        targetText: translatedText
-      });
-
-      this.send(participant.socket, {
-        type: "transcript.chunk",
-        turnId,
-        speakerId: sourceSpeaker.clientId,
-        sourceLanguage: turn.sourceLanguage,
-        targetLanguage,
-        translatedText,
-        originalText: sourceText,
-        isFinal: true,
-        timestamp: Date.now(),
-        debug: {
-          transcriptionPath: transcription.path,
-          transcriptionDetail: transcription.detail,
-          translationPath: translation.path,
-          translationDetail: translation.detail,
-          ttsPath: speech?.path,
-          ttsDetail: speech?.detail
-        }
-      });
-
-      if (speech) {
-        this.send(participant.socket, {
-          type: "audio.chunk",
+        this.db.insertTurn({
+          roomId: turn.roomId,
           turnId,
+          speakerId: sourceSpeaker.clientId,
+          sourceLanguage: turn.sourceLanguage,
+          sourceText,
           targetLanguage,
-          mimeType: "audio/pcm",
-          payloadBase64: speech.value,
-          sequence: 0,
-          isLast: true
+          targetText: translatedText
         });
-      }
-    }
+
+        this.send(participant.socket, {
+          type: "transcript.chunk",
+          turnId,
+          speakerId: sourceSpeaker.clientId,
+          sourceLanguage: turn.sourceLanguage,
+          targetLanguage,
+          translatedText,
+          originalText: sourceText,
+          isFinal: true,
+          timestamp: Date.now(),
+          debug: {
+            transcriptionPath: transcription.path,
+            transcriptionDetail: transcription.detail,
+            translationPath: translation.path,
+            translationDetail: translation.detail,
+            ttsPath: shouldSynthesize ? "tts.deferred" : undefined
+          }
+        });
+
+        if (shouldSynthesize) {
+          void this.synthesizeAndSendAudio({
+            participant,
+            turnId,
+            targetLanguage,
+            text: translatedText,
+            speakerId: sourceSpeaker.clientId
+          });
+        }
+      })
+    );
     this.activeTurns.delete(turnId);
+  }
+
+  private async synthesizeAndSendAudio(args: {
+    participant: RoomParticipant;
+    turnId: string;
+    targetLanguage: SupportedLanguage;
+    text: string;
+    speakerId: string;
+  }) {
+    const speech = await this.providers.synthesizeSpeech({
+      text: args.text,
+      targetLanguage: args.targetLanguage,
+      speakerId: args.speakerId
+    });
+
+    this.send(args.participant.socket, {
+      type: "audio.chunk",
+      turnId: args.turnId,
+      targetLanguage: args.targetLanguage,
+      mimeType: "audio/pcm",
+      payloadBase64: speech.value,
+      sequence: 0,
+      isLast: true
+    });
   }
 
   private ensureRoom(roomId: string): RoomState {
