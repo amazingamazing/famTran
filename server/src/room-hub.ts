@@ -28,9 +28,31 @@ type ActiveTurn = {
   textChunks: string[];
 };
 
-const decodeAudioPayload = (payloadBase64: string): string => {
+const decodeTextHintPayload = (payloadBase64: string, sequence: number, isLast: boolean): string => {
+  // Simulator text arrives as a single terminal packet; mic PCM arrives as many non-terminal packets.
+  if (sequence !== 0 || !isLast) {
+    return "";
+  }
   try {
-    return Buffer.from(payloadBase64, "base64").toString("utf8").trim();
+    const bytes = Buffer.from(payloadBase64, "base64");
+    if (bytes.length === 0 || bytes.length > 8192) {
+      return "";
+    }
+    if (bytes.includes(0)) {
+      return "";
+    }
+    const text = bytes.toString("utf8").trim();
+    if (!text || text.includes("\uFFFD")) {
+      return "";
+    }
+    for (const char of text) {
+      const code = char.charCodeAt(0);
+      const isControl = code < 32 && char !== "\n" && char !== "\r" && char !== "\t";
+      if (isControl) {
+        return "";
+      }
+    }
+    return text;
   } catch {
     return "";
   }
@@ -107,7 +129,7 @@ export class RoomHub {
         if (chunkBytes) {
           turn.audioChunks.push(chunkBytes);
         }
-        const textChunk = decodeAudioPayload(event.payloadBase64);
+        const textChunk = decodeTextHintPayload(event.payloadBase64, event.sequence, event.isLast);
         if (textChunk.length > 0) {
           turn.textChunks.push(textChunk);
         }

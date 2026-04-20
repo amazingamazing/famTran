@@ -113,5 +113,52 @@ describe("RoomHub", () => {
     expect(corrections).toHaveLength(1);
     expect(corrections[0].rightText).toBe("Peh-peh");
   });
+
+  it("does not treat raw pcm mic bytes as utf8 text hints", async () => {
+    const enSocket = new MockSocket();
+    const jaSocket = new MockSocket();
+    const enClientId = hub.join(enSocket as never, {
+      type: "session.join",
+      roomId: "ROOM42",
+      displayName: "Alex",
+      language: "en",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+
+    hub.join(jaSocket as never, {
+      type: "session.join",
+      roomId: "ROOM42",
+      displayName: "Yuki",
+      language: "ja",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+
+    await hub.handleEvent(enClientId, {
+      type: "turn.start",
+      turnId: "turn-raw-audio",
+      roomId: "ROOM42",
+      speakerLanguage: "en"
+    });
+    await hub.handleEvent(enClientId, {
+      type: "audio.input",
+      turnId: "turn-raw-audio",
+      roomId: "ROOM42",
+      payloadBase64: Buffer.from([0, 0, 16, 255, 32, 128, 1, 254, 64, 192]).toString("base64"),
+      sequence: 0,
+      isLast: false
+    });
+    await hub.handleEvent(enClientId, {
+      type: "turn.stop",
+      turnId: "turn-raw-audio",
+      roomId: "ROOM42"
+    });
+
+    const transcriptMessages = jaSocket.sent.map((item) => JSON.parse(item)).filter((event) => event.type === "transcript.chunk");
+    expect(transcriptMessages).toHaveLength(0);
+  });
 });
 
