@@ -284,7 +284,15 @@ button.transcriptToggleOpen::after {
   }
 
   .compactInfoGrid {
-    grid-template-columns: 1fr;
+    gap: 0.4rem;
+  }
+
+  .compactInfoCell {
+    padding: 0.45rem 0.5rem;
+  }
+
+  .compactInfoLabel {
+    font-size: 0.7rem;
   }
 
   .grid2,
