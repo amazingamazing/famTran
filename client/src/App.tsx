@@ -234,6 +234,7 @@ function App() {
       !(getCookie("family_translation_room_id").trim() && getCookie("family_translation_display_name").trim())
     )
   );
+  const [playbackUnlocked, setPlaybackUnlocked] = useState(false);
 
   const addDebugEvent = (message: string) => {
     const entry = `${new Date().toISOString()} ${message}`;
@@ -282,6 +283,28 @@ function App() {
       playingRef.current = false;
       addDebugEvent(`audio.playback.decode_failed mime=${next.mimeType}`);
       playQueue();
+    }
+  };
+
+  const unlockPlaybackAudio = async () => {
+    if (playbackUnlocked) {
+      return;
+    }
+    try {
+      const silentPcm = new Int16Array(1200);
+      const bytes = new Uint8Array(silentPcm.buffer);
+      const b64 = uint8ToBase64(bytes);
+      const playable = audioPayloadToObjectUrl(b64, "audio/pcm");
+      const audio = new Audio(playable.url);
+      try {
+        await audio.play();
+        setPlaybackUnlocked(true);
+        addDebugEvent("audio.unlock.ok");
+      } finally {
+        URL.revokeObjectURL(playable.url);
+      }
+    } catch {
+      addDebugEvent("audio.unlock.failed");
     }
   };
 
@@ -982,7 +1005,34 @@ function App() {
       ) : null}
 
       <section className="panel">
-        <h2>Transcript</h2>
+        <div className="transcriptPanelHead">
+          <h2>Transcript</h2>
+          {!playbackUnlocked ? (
+            <button
+              type="button"
+              className="transcriptAudioUnlock"
+              onClick={() => void unlockPlaybackAudio()}
+              aria-label="Enable audio playback"
+            >
+              <svg
+                className="transcriptAudioUnlockIcon"
+                viewBox="0 0 24 24"
+                width={22}
+                height={22}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+              </svg>
+            </button>
+          ) : null}
+        </div>
         <ul className="transcriptList">
           {sortedTranscripts.map((item) => (
             <TranscriptItem key={`${item.turnId}-${item.timestamp}`} item={item} />

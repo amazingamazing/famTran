@@ -97,6 +97,46 @@ button:disabled {
   flex: 1;
 }
 
+.transcriptPanelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.transcriptPanelHead h2 {
+  margin: 0;
+}
+
+.transcriptAudioUnlock {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin: 0;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid #3d5a8a;
+  background: #1a2d4a;
+  color: #a8c4f0;
+  cursor: pointer;
+}
+
+.transcriptAudioUnlock:hover,
+.transcriptAudioUnlock:focus-visible {
+  background: #243c63;
+  color: #d4e3fb;
+  outline: none;
+  box-shadow: 0 0 0 2px #314056;
+}
+
+.transcriptAudioUnlockIcon {
+  display: block;
+}
+
 .transcriptList {
   list-style: none;
   margin: 0;
