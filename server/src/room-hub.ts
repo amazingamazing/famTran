@@ -301,7 +301,7 @@ export class RoomHub {
       type: "audio.chunk",
       turnId: args.turnId,
       targetLanguage: args.targetLanguage,
-      mimeType: "audio/pcm",
+      mimeType: speech.mimeType,
       payloadBase64: speech.value,
       sequence: 0,
       isLast: true

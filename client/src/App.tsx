@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProviderType, ServerEvent, SupportedLanguage } from "@family-translation/shared";
 
 import "./App.css";
+import { audioPayloadToObjectUrl } from "./lib/audio-playback";
 import { parseEvent } from "./lib/parse-event";
 import {
   readControlsExpandedPreference,
@@ -165,7 +166,7 @@ const uint8ToBase64 = (bytes: Uint8Array): string => {
 
 function App() {
   const wsRef = useRef<WebSocket | null>(null);
-  const audioQueueRef = useRef<Array<{ payloadBase64: string; isLast: boolean }>>([]);
+  const audioQueueRef = useRef<Array<{ payloadBase64: string; mimeType: "audio/pcm" | "audio/wav"; isLast: boolean }>>([]);
   const playingRef = useRef(false);
   const autopilotTimeoutRef = useRef<number | null>(null);
   const autoPilotEnabledRef = useRef(false);
@@ -232,32 +233,32 @@ function App() {
       return;
     }
     playingRef.current = true;
-    const content = atob(next.payloadBase64);
-    const duration = Math.min(Math.max(content.length * 0.02, 0.08), 1.2);
-    const audioContext = new AudioContext();
-    const oscillator = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    oscillator.frequency.value = 240;
-    gain.gain.value = 0.03;
-    oscillator.connect(gain);
-    gain.connect(audioContext.destination);
-    oscillator.start();
-    oscillator.stop(audioContext.currentTime + duration);
-    oscillator.onended = () => {
-      if (next.isLast) {
-        const ding = new AudioContext();
-        const o2 = ding.createOscillator();
-        const g2 = ding.createGain();
-        o2.frequency.value = 920;
-        g2.gain.value = 0.02;
-        o2.connect(g2);
-        g2.connect(ding.destination);
-        o2.start();
-        o2.stop(ding.currentTime + 0.05);
-      }
+
+    try {
+      const playable = audioPayloadToObjectUrl(next.payloadBase64, next.mimeType);
+      const audio = new Audio(playable.url);
+      audio.onended = () => {
+        URL.revokeObjectURL(playable.url);
+        playingRef.current = false;
+        playQueue();
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(playable.url);
+        playingRef.current = false;
+        addDebugEvent(`audio.playback.error mime=${next.mimeType}`);
+        playQueue();
+      };
+      void audio.play().catch(() => {
+        URL.revokeObjectURL(playable.url);
+        playingRef.current = false;
+        addDebugEvent(`audio.playback.blocked mime=${next.mimeType}`);
+        playQueue();
+      });
+    } catch {
       playingRef.current = false;
+      addDebugEvent(`audio.playback.decode_failed mime=${next.mimeType}`);
       playQueue();
-    };
+    }
   };
 
   useEffect(() => {
@@ -454,9 +455,13 @@ function App() {
         return;
       }
       if (event.type === "audio.chunk") {
-        audioQueueRef.current.push({ payloadBase64: event.payloadBase64, isLast: event.isLast });
+        audioQueueRef.current.push({
+          payloadBase64: event.payloadBase64,
+          mimeType: event.mimeType,
+          isLast: event.isLast
+        });
         playQueue();
-        addDebugEvent(`audio.chunk turn=${event.turnId} last=${event.isLast}`);
+        addDebugEvent(`audio.chunk turn=${event.turnId} mime=${event.mimeType} last=${event.isLast}`);
         return;
       }
       if (event.type === "debug.turn") {

@@ -33,7 +33,7 @@ export type ServerEvent =
       type: "audio.chunk";
       turnId: string;
       targetLanguage: SupportedLanguage;
-      mimeType: "audio/pcm";
+      mimeType: "audio/pcm" | "audio/wav";
       payloadBase64: string;
       sequence: number;
       isLast: boolean;

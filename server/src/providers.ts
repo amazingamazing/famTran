@@ -41,7 +41,7 @@ type PipelineResult<T> = {
 
 export type TranscriptionResult = PipelineResult<string>;
 export type TranslationResult = PipelineResult<string>;
-export type SynthesisResult = PipelineResult<string>;
+export type SynthesisResult = PipelineResult<string> & { mimeType: "audio/pcm" | "audio/wav" };
 
 export interface ProviderPipeline {
   setProviders(next: ProviderSelection): ProviderSelection;
@@ -247,11 +247,16 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
         });
         if (response.ok) {
           const bytes = new Uint8Array(await response.arrayBuffer());
-          return { value: Buffer.from(bytes).toString("base64"), path: "tts.cartesia_api" };
+          return { value: Buffer.from(bytes).toString("base64"), path: "tts.cartesia_api", mimeType: "audio/pcm" };
         }
-        return { value: Buffer.from(args.text).toString("base64"), path: "tts.cartesia_http_error", detail: `status=${response.status}` };
+        return {
+          value: Buffer.from(args.text).toString("base64"),
+          path: "tts.cartesia_http_error",
+          detail: `status=${response.status}`,
+          mimeType: "audio/pcm"
+        };
       } catch {
-        return { value: Buffer.from(args.text).toString("base64"), path: "tts.cartesia_exception" };
+        return { value: Buffer.from(args.text).toString("base64"), path: "tts.cartesia_exception", mimeType: "audio/pcm" };
       }
     }
 
@@ -272,15 +277,20 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
         });
         if (response.ok) {
           const bytes = new Uint8Array(await response.arrayBuffer());
-          return { value: Buffer.from(bytes).toString("base64"), path: "tts.openai_api" };
+          return { value: Buffer.from(bytes).toString("base64"), path: "tts.openai_api", mimeType: "audio/wav" };
         }
-        return { value: Buffer.from(args.text).toString("base64"), path: "tts.openai_http_error", detail: `status=${response.status}` };
+        return {
+          value: Buffer.from(args.text).toString("base64"),
+          path: "tts.openai_http_error",
+          detail: `status=${response.status}`,
+          mimeType: "audio/wav"
+        };
       } catch {
-        return { value: Buffer.from(args.text).toString("base64"), path: "tts.openai_exception" };
+        return { value: Buffer.from(args.text).toString("base64"), path: "tts.openai_exception", mimeType: "audio/wav" };
       }
     }
 
-    return { value: Buffer.from(args.text).toString("base64"), path: "tts.passthrough_text_base64" };
+    return { value: Buffer.from(args.text).toString("base64"), path: "tts.passthrough_text_base64", mimeType: "audio/pcm" };
   }
 
   private async translateWithOpenAi(args: {

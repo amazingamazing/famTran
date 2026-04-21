@@ -25,6 +25,16 @@ class SlowTtsPipeline extends InMemoryProviderPipeline {
   }
 }
 
+class WavTtsPipeline extends InMemoryProviderPipeline {
+  override async synthesizeSpeech(args: { text: string; targetLanguage: "en" | "ja"; speakerId: string }) {
+    const result = await super.synthesizeSpeech(args);
+    return {
+      ...result,
+      mimeType: "audio/wav" as const
+    };
+  }
+}
+
 describe("RoomHub", () => {
   let dbDir = "";
   let db: AppDb;
@@ -295,6 +305,65 @@ describe("RoomHub", () => {
     expect(enDebugTurn.participants.some((entry: { targetLanguage: string }) => entry.targetLanguage === "ja")).toBe(
       true
     );
+  });
+
+  it("forwards synthesized audio mime type to clients", async () => {
+    hub = new RoomHub(
+      db,
+      new WavTtsPipeline({
+        stt: "deepgram",
+        translation: "gemini",
+        tts: "cartesia"
+      })
+    );
+
+    const enSocket = new MockSocket();
+    const jaSocket = new MockSocket();
+    const enClientId = hub.join(enSocket as never, {
+      type: "session.join",
+      roomId: "ROOM42",
+      displayName: "Alex",
+      language: "en",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+
+    hub.join(jaSocket as never, {
+      type: "session.join",
+      roomId: "ROOM42",
+      displayName: "Yuki",
+      language: "ja",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+
+    await hub.handleEvent(enClientId, {
+      type: "turn.start",
+      turnId: "turn-mime",
+      roomId: "ROOM42",
+      speakerLanguage: "en"
+    });
+    await hub.handleEvent(enClientId, {
+      type: "audio.input",
+      turnId: "turn-mime",
+      roomId: "ROOM42",
+      payloadBase64: Buffer.from("Hello family").toString("base64"),
+      sequence: 0,
+      isLast: true
+    });
+    await hub.handleEvent(enClientId, {
+      type: "turn.stop",
+      turnId: "turn-mime",
+      roomId: "ROOM42"
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const audioMessage = jaSocket.sent.map((item) => JSON.parse(item)).find((event) => event.type === "audio.chunk");
+    expect(audioMessage).toBeDefined();
+    expect(audioMessage.mimeType).toBe("audio/wav");
   });
 });
 
