@@ -4,7 +4,7 @@ import type { ClientEvent, ServerEvent, SupportedLanguage } from "@family-transl
 import type { WebSocket } from "ws";
 
 import type { AppDb } from "./db.js";
-import type { ProviderPipeline } from "./providers.js";
+import type { ProviderPipeline, SynthesisResult } from "./providers.js";
 
 type RoomParticipant = {
   clientId: string;
@@ -193,77 +193,154 @@ export class RoomHub {
     const recentTurns = this.db.latestTurns(turn.roomId);
 
     const participants = [...room.participants.values()];
-    const participantDebugRows = await Promise.all(
+    const translateContext = { glossaryLines, correctionLines, recentTurns };
+    const oppositeLanguage: SupportedLanguage = turn.sourceLanguage === "en" ? "ja" : "en";
+
+    const turnRows = await Promise.all(
       participants.map(async (participant) => {
         const targetLanguage = participant.language;
-        const translation =
-          participant.clientId === turn.speakerId
-            ? {
-                value: sourceText,
-                path: "translation.self_passthrough",
-                detail: "speaker_receives_source_text"
-              }
-            : await this.providers.translateText({
-                sourceText,
-                sourceLanguage: turn.sourceLanguage,
-                targetLanguage,
-                context: { glossaryLines, correctionLines, recentTurns }
-              });
-        const translatedText = translation.value;
-        const shouldSynthesize = participant.clientId !== turn.speakerId && participant.hearAudio;
-
-        this.db.insertTurn({
-          roomId: turn.roomId,
-          turnId,
-          speakerId: sourceSpeaker.clientId,
-          sourceLanguage: turn.sourceLanguage,
-          sourceText,
-          targetLanguage,
-          targetText: translatedText
-        });
-
-        this.send(participant.socket, {
-          type: "transcript.chunk",
-          turnId,
-          speakerId: sourceSpeaker.clientId,
-          sourceLanguage: turn.sourceLanguage,
-          targetLanguage,
-          translatedText,
-          originalText: sourceText,
-          isFinal: true,
-          timestamp: Date.now(),
-          debug: {
-            transcriptionPath: transcription.path,
-            transcriptionDetail: transcription.detail,
-            translationPath: translation.path,
-            translationDetail: translation.detail,
-            ttsPath: shouldSynthesize ? "tts.deferred" : undefined
-          }
-        });
-
-        if (shouldSynthesize) {
-          void this.synthesizeAndSendAudio({
-            participant,
-            turnId,
-            targetLanguage,
-            text: translatedText,
-            speakerId: sourceSpeaker.clientId
-          });
-        }
-
-        return {
-          clientId: participant.clientId,
-          displayName: participant.displayName,
-          targetLanguage,
-          isSpeaker: participant.clientId === turn.speakerId,
-          hearAudio: participant.hearAudio,
-          translatedText,
-          translationPath: translation.path,
-          translationDetail: translation.detail,
-          ttsPath: shouldSynthesize ? "tts.deferred" : undefined
-        };
+        const isSpeaker = participant.clientId === turn.speakerId;
+        const translation = isSpeaker
+          ? {
+              value: sourceText,
+              path: "translation.self_passthrough",
+              detail: "speaker_receives_source_text"
+            }
+          : await this.providers.translateText({
+              sourceText,
+              sourceLanguage: turn.sourceLanguage,
+              targetLanguage,
+              context: translateContext
+            });
+        return { participant, targetLanguage, isSpeaker, translation, translatedText: translation.value };
       })
     );
+
+    type SpeakerTts = { text: string; targetLanguage: SupportedLanguage; path: string };
+    let speakerHearsTranslation: SpeakerTts | null = null;
+    if (sourceSpeaker.hearAudio) {
+      const foreign = turnRows.find(
+        (row) =>
+          !row.isSpeaker &&
+          row.targetLanguage !== turn.sourceLanguage &&
+          row.translatedText.trim().length > 0
+      );
+      if (foreign) {
+        speakerHearsTranslation = {
+          text: foreign.translatedText,
+          targetLanguage: foreign.targetLanguage,
+          path: "speaker_hears_listener_translation"
+        };
+      } else if (sourceText.trim().length > 0) {
+        const t = await this.providers.translateText({
+          sourceText,
+          sourceLanguage: turn.sourceLanguage,
+          targetLanguage: oppositeLanguage,
+          context: translateContext
+        });
+        if (t.value.trim().length > 0) {
+          speakerHearsTranslation = { text: t.value, targetLanguage: oppositeLanguage, path: t.path };
+        }
+      }
+    }
+
+    const ttsKey = (lang: SupportedLanguage, text: string) => `${lang}::${text}`;
+    const ttsCache = new Map<string, SynthesisResult>();
+    const ttsInFlight = new Map<string, Promise<SynthesisResult>>();
+
+    const getOrSynthesize = async (text: string, ttsLanguage: SupportedLanguage) => {
+      const key = ttsKey(ttsLanguage, text);
+      const cached = ttsCache.get(key);
+      if (cached) {
+        return cached;
+      }
+      const pending = ttsInFlight.get(key);
+      if (pending) {
+        return pending;
+      }
+      const p = this.providers
+        .synthesizeSpeech({ text, targetLanguage: ttsLanguage, speakerId: sourceSpeaker.clientId })
+        .then((speech) => {
+          ttsInFlight.delete(key);
+          ttsCache.set(key, speech);
+          return speech;
+        });
+      ttsInFlight.set(key, p);
+      return p;
+    };
+
+    const sendPcm = (recipient: RoomParticipant, ttsLanguage: SupportedLanguage, speech: SynthesisResult) => {
+      this.send(recipient.socket, {
+        type: "audio.chunk",
+        turnId,
+        targetLanguage: ttsLanguage,
+        mimeType: speech.mimeType,
+        payloadBase64: speech.value,
+        sequence: 0,
+        isLast: true
+      });
+    };
+
+    const participantDebugRows = turnRows.map((row) => {
+      const { participant, targetLanguage, isSpeaker, translation, translatedText } = row;
+      const listenerGetsTts = !isSpeaker && participant.hearAudio;
+      const speakerGetsTts = Boolean(isSpeaker && speakerHearsTranslation);
+      const shouldSynthesizeTts = listenerGetsTts || speakerGetsTts;
+
+      this.db.insertTurn({
+        roomId: turn.roomId,
+        turnId,
+        speakerId: sourceSpeaker.clientId,
+        sourceLanguage: turn.sourceLanguage,
+        sourceText,
+        targetLanguage,
+        targetText: translatedText
+      });
+
+      this.send(participant.socket, {
+        type: "transcript.chunk",
+        turnId,
+        speakerId: sourceSpeaker.clientId,
+        sourceLanguage: turn.sourceLanguage,
+        targetLanguage,
+        translatedText,
+        originalText: sourceText,
+        isFinal: true,
+        timestamp: Date.now(),
+        debug: {
+          transcriptionPath: transcription.path,
+          transcriptionDetail: transcription.detail,
+          translationPath: translation.path,
+          translationDetail: translation.detail,
+          ttsPath: shouldSynthesizeTts ? "tts.deferred" : undefined
+        }
+      });
+
+      if (listenerGetsTts) {
+        void (async () => {
+          const speech = await getOrSynthesize(translatedText, targetLanguage);
+          sendPcm(participant, targetLanguage, speech);
+        })();
+      }
+      if (speakerGetsTts && speakerHearsTranslation) {
+        void (async () => {
+          const speech = await getOrSynthesize(speakerHearsTranslation.text, speakerHearsTranslation.targetLanguage);
+          sendPcm(sourceSpeaker, speakerHearsTranslation.targetLanguage, speech);
+        })();
+      }
+
+      return {
+        clientId: participant.clientId,
+        displayName: participant.displayName,
+        targetLanguage,
+        isSpeaker,
+        hearAudio: participant.hearAudio,
+        translatedText,
+        translationPath: translation.path,
+        translationDetail: translation.detail,
+        ttsPath: shouldSynthesizeTts ? "tts.deferred" : undefined
+      };
+    });
 
     this.broadcastToAll({
       type: "debug.turn",
@@ -282,30 +359,6 @@ export class RoomHub {
       participants: participantDebugRows
     });
     this.activeTurns.delete(turnId);
-  }
-
-  private async synthesizeAndSendAudio(args: {
-    participant: RoomParticipant;
-    turnId: string;
-    targetLanguage: SupportedLanguage;
-    text: string;
-    speakerId: string;
-  }) {
-    const speech = await this.providers.synthesizeSpeech({
-      text: args.text,
-      targetLanguage: args.targetLanguage,
-      speakerId: args.speakerId
-    });
-
-    this.send(args.participant.socket, {
-      type: "audio.chunk",
-      turnId: args.turnId,
-      targetLanguage: args.targetLanguage,
-      mimeType: speech.mimeType,
-      payloadBase64: speech.value,
-      sequence: 0,
-      isLast: true
-    });
   }
 
   private ensureRoom(roomId: string): RoomState {
