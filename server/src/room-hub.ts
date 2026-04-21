@@ -194,7 +194,6 @@ export class RoomHub {
 
     const participants = [...room.participants.values()];
     const translateContext = { glossaryLines, correctionLines, recentTurns };
-    const oppositeLanguage: SupportedLanguage = turn.sourceLanguage === "en" ? "ja" : "en";
 
     const turnRows = await Promise.all(
       participants.map(async (participant) => {
@@ -215,34 +214,6 @@ export class RoomHub {
         return { participant, targetLanguage, isSpeaker, translation, translatedText: translation.value };
       })
     );
-
-    type SpeakerTts = { text: string; targetLanguage: SupportedLanguage; path: string };
-    let speakerHearsTranslation: SpeakerTts | null = null;
-    if (sourceSpeaker.hearAudio) {
-      const foreign = turnRows.find(
-        (row) =>
-          !row.isSpeaker &&
-          row.targetLanguage !== turn.sourceLanguage &&
-          row.translatedText.trim().length > 0
-      );
-      if (foreign) {
-        speakerHearsTranslation = {
-          text: foreign.translatedText,
-          targetLanguage: foreign.targetLanguage,
-          path: "speaker_hears_listener_translation"
-        };
-      } else if (sourceText.trim().length > 0) {
-        const t = await this.providers.translateText({
-          sourceText,
-          sourceLanguage: turn.sourceLanguage,
-          targetLanguage: oppositeLanguage,
-          context: translateContext
-        });
-        if (t.value.trim().length > 0) {
-          speakerHearsTranslation = { text: t.value, targetLanguage: oppositeLanguage, path: t.path };
-        }
-      }
-    }
 
     const ttsKey = (lang: SupportedLanguage, text: string) => `${lang}::${text}`;
     const ttsCache = new Map<string, SynthesisResult>();
@@ -284,8 +255,7 @@ export class RoomHub {
     const participantDebugRows = turnRows.map((row) => {
       const { participant, targetLanguage, isSpeaker, translation, translatedText } = row;
       const listenerGetsTts = !isSpeaker && participant.hearAudio;
-      const speakerGetsTts = Boolean(isSpeaker && speakerHearsTranslation);
-      const shouldSynthesizeTts = listenerGetsTts || speakerGetsTts;
+      const shouldSynthesizeTts = listenerGetsTts;
 
       this.db.insertTurn({
         roomId: turn.roomId,
@@ -320,12 +290,6 @@ export class RoomHub {
         void (async () => {
           const speech = await getOrSynthesize(translatedText, targetLanguage);
           sendPcm(participant, targetLanguage, speech);
-        })();
-      }
-      if (speakerGetsTts && speakerHearsTranslation) {
-        void (async () => {
-          const speech = await getOrSynthesize(speakerHearsTranslation.text, speakerHearsTranslation.targetLanguage);
-          sendPcm(sourceSpeaker, speakerHearsTranslation.targetLanguage, speech);
         })();
       }
 

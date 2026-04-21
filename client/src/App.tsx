@@ -29,6 +29,29 @@ type TranscriptRow = {
 
 type DebugTurnRow = Extract<ServerEvent, { type: "debug.turn" }>;
 
+function AudioUnlockButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" className="transcriptAudioUnlock" onClick={onClick} aria-label="Enable audio playback">
+      <svg
+        className="transcriptAudioUnlockIcon"
+        viewBox="0 0 24 24"
+        width={22}
+        height={22}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+        <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+        <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+      </svg>
+    </button>
+  );
+}
+
 function TranscriptItem({ item }: { item: TranscriptRow }) {
   const [metaOpen, setMetaOpen] = useState(false);
   return (
@@ -191,6 +214,8 @@ const uint8ToBase64 = (bytes: Uint8Array): string => {
 function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const audioQueueRef = useRef<Array<{ payloadBase64: string; mimeType: "audio/pcm" | "audio/wav"; isLast: boolean }>>([]);
+  const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
+  const sharedPlaybackBlobUrlRef = useRef<string | null>(null);
   const playingRef = useRef(false);
   const autopilotTimeoutRef = useRef<number | null>(null);
   const autoPilotEnabledRef = useRef(false);
@@ -261,20 +286,59 @@ function App() {
 
     try {
       const playable = audioPayloadToObjectUrl(next.payloadBase64, next.mimeType);
-      const audio = new Audio(playable.url);
+      const url = playable.url;
+      const shared = playbackAudioRef.current;
+
+      const finishShared = (revokeUrl: string) => {
+        if (sharedPlaybackBlobUrlRef.current === revokeUrl) {
+          URL.revokeObjectURL(revokeUrl);
+          sharedPlaybackBlobUrlRef.current = null;
+        }
+      };
+
+      if (shared) {
+        if (sharedPlaybackBlobUrlRef.current) {
+          URL.revokeObjectURL(sharedPlaybackBlobUrlRef.current);
+          sharedPlaybackBlobUrlRef.current = null;
+        }
+        sharedPlaybackBlobUrlRef.current = url;
+
+        let finished = false;
+        const onDone = (debug?: string) => {
+          if (finished) {
+            return;
+          }
+          finished = true;
+          if (debug) {
+            addDebugEvent(debug);
+          }
+          finishShared(url);
+          playingRef.current = false;
+          playQueue();
+        };
+
+        shared.onended = () => onDone();
+        shared.onerror = () => onDone(`audio.playback.error mime=${next.mimeType}`);
+        shared.src = url;
+        shared.load();
+        void shared.play().catch(() => onDone(`audio.playback.blocked mime=${next.mimeType}`));
+        return;
+      }
+
+      const audio = new Audio(url);
       audio.onended = () => {
-        URL.revokeObjectURL(playable.url);
+        URL.revokeObjectURL(url);
         playingRef.current = false;
         playQueue();
       };
       audio.onerror = () => {
-        URL.revokeObjectURL(playable.url);
+        URL.revokeObjectURL(url);
         playingRef.current = false;
         addDebugEvent(`audio.playback.error mime=${next.mimeType}`);
         playQueue();
       };
       void audio.play().catch(() => {
-        URL.revokeObjectURL(playable.url);
+        URL.revokeObjectURL(url);
         playingRef.current = false;
         addDebugEvent(`audio.playback.blocked mime=${next.mimeType}`);
         playQueue();
@@ -287,7 +351,7 @@ function App() {
   };
 
   const unlockPlaybackAudio = async () => {
-    if (playbackUnlocked) {
+    if (playbackUnlocked && playbackAudioRef.current) {
       return;
     }
     try {
@@ -295,14 +359,21 @@ function App() {
       const bytes = new Uint8Array(silentPcm.buffer);
       const b64 = uint8ToBase64(bytes);
       const playable = audioPayloadToObjectUrl(b64, "audio/pcm");
-      const audio = new Audio(playable.url);
-      try {
-        await audio.play();
-        setPlaybackUnlocked(true);
-        addDebugEvent("audio.unlock.ok");
-      } finally {
-        URL.revokeObjectURL(playable.url);
+      const url = playable.url;
+
+      if (!playbackAudioRef.current) {
+        playbackAudioRef.current = new Audio();
       }
+      const el = playbackAudioRef.current;
+      el.src = url;
+      el.load();
+      await el.play();
+      URL.revokeObjectURL(url);
+      el.removeAttribute("src");
+      el.load();
+
+      setPlaybackUnlocked(true);
+      addDebugEvent("audio.unlock.ok");
     } catch {
       addDebugEvent("audio.unlock.failed");
     }
@@ -830,6 +901,9 @@ function App() {
             <button type="button" onClick={copyDebugBlob}>
               Copy debug blob
             </button>
+            {!playbackUnlocked ? (
+              <AudioUnlockButton onClick={() => void unlockPlaybackAudio()} />
+            ) : null}
           </div>
           <p className={`headerNet ${networkOnline ? "ok" : "warn"}`}>
             {networkOnline ? "Online" : "Offline"}
@@ -1007,31 +1081,7 @@ function App() {
       <section className="panel">
         <div className="transcriptPanelHead">
           <h2>Transcript</h2>
-          {!playbackUnlocked ? (
-            <button
-              type="button"
-              className="transcriptAudioUnlock"
-              onClick={() => void unlockPlaybackAudio()}
-              aria-label="Enable audio playback"
-            >
-              <svg
-                className="transcriptAudioUnlockIcon"
-                viewBox="0 0 24 24"
-                width={22}
-                height={22}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden
-              >
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-              </svg>
-            </button>
-          ) : null}
+          {!playbackUnlocked ? <AudioUnlockButton onClick={() => void unlockPlaybackAudio()} /> : null}
         </div>
         <ul className="transcriptList">
           {sortedTranscripts.map((item) => (
