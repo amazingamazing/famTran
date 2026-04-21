@@ -15,6 +15,12 @@ const writeAscii = (view: DataView, offset: number, value: string) => {
   }
 };
 
+const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+};
+
 export const convertPcm16MonoToWavBytes = (pcmBytes: Uint8Array, sampleRate: number): Uint8Array => {
   const wavHeaderBytes = 44;
   const wavBytes = new Uint8Array(wavHeaderBytes + pcmBytes.length);
@@ -43,6 +49,6 @@ export const audioPayloadToObjectUrl = (
 ): { url: string; mimeType: "audio/wav" } => {
   const bytes = base64ToBytes(payloadBase64);
   const wavBytes = mimeType === "audio/pcm" ? convertPcm16MonoToWavBytes(bytes, 22050) : bytes;
-  const blob = new Blob([wavBytes], { type: "audio/wav" });
+  const blob = new Blob([toArrayBuffer(wavBytes)], { type: "audio/wav" });
   return { url: URL.createObjectURL(blob), mimeType: "audio/wav" };
 };
