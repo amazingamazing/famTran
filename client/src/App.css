@@ -18,11 +18,28 @@
   margin-top: 0;
 }
 
+.pageTitle {
+  margin: 0 0 0.75rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
 .headerRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+}
+
+.headerToolbar {
+  margin-top: 0;
+  flex-wrap: wrap;
+}
+
+.headerNet {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
 }
 
 .headerRow .actions {
@@ -95,6 +112,74 @@ button:disabled {
   padding: 0.75rem;
 }
 
+.transcriptRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.transcriptMain {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+button.transcriptToggle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  margin: 0;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid #314056;
+  background: #0e1218;
+  cursor: pointer;
+  line-height: 0;
+  position: relative;
+}
+
+button.transcriptToggle::after {
+  content: "▶";
+  font-size: 0.55rem;
+  line-height: 1;
+  transition: transform 0.12s ease;
+}
+
+button.transcriptToggleOpen::after {
+  transform: rotate(90deg);
+}
+
+.transcriptDetailsBody {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  background: #0e1218;
+  border: 1px solid #2c384e;
+  border-radius: 6px;
+  font-size: 0.88rem;
+}
+
+.transcriptOriginal {
+  margin: 0 0 0.4rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.transcriptTime {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #9fb0c9;
+}
+
+.liveMetaLine {
+  margin: 0.45rem 0 0;
+  font-size: 0.88rem;
+  color: #c5d0e0;
+}
+
 .full {
   grid-column: 1 / -1;
 }
@@ -112,11 +197,44 @@ button:disabled {
   gap: 0.75rem;
 }
 
-.compactSessionTop {
+.roomInfoHeading {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9fb0c9;
+}
+
+.compactInfoGrid {
   display: grid;
-  gap: 0.35rem;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.compactInfoCell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  background: #151d29;
+  border: 1px solid #2c384e;
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  min-width: 0;
   font-size: 0.9rem;
+}
+
+.compactInfoLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9fb0c9;
+}
+
+.compactInfoValue {
+  color: #f3f6fb;
+  word-break: break-word;
 }
 
 @media (max-width: 800px) {
@@ -125,7 +243,7 @@ button:disabled {
     align-items: flex-start;
   }
 
-  .compactSessionTop {
+  .compactInfoGrid {
     grid-template-columns: 1fr;
   }
 

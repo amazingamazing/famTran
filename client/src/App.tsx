@@ -29,6 +29,30 @@ type TranscriptRow = {
 
 type DebugTurnRow = Extract<ServerEvent, { type: "debug.turn" }>;
 
+function TranscriptItem({ item }: { item: TranscriptRow }) {
+  const [metaOpen, setMetaOpen] = useState(false);
+  return (
+    <li>
+      <div className="transcriptRow">
+        <p className="transcriptMain">{item.translatedText}</p>
+        <button
+          type="button"
+          className={metaOpen ? "transcriptToggle transcriptToggleOpen" : "transcriptToggle"}
+          onClick={() => setMetaOpen((open) => !open)}
+          aria-expanded={metaOpen}
+          aria-label="Source text and time"
+        />
+      </div>
+      {metaOpen ? (
+        <div className="transcriptDetailsBody">
+          <p className="transcriptOriginal">{item.originalText}</p>
+          <p className="transcriptTime">{new Date(item.timestamp).toLocaleString()}</p>
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
 const WS_BASE_URL =
   window.location.hostname === "localhost"
     ? "ws://localhost:8787"
@@ -622,7 +646,6 @@ function App() {
       micProcessorRef.current = processor;
       setMicTestActive(true);
       addDebugEvent(`mic.start turn=${turnId} sampleRate=${audioContext.sampleRate}`);
-      setStatusMessage("Mic test started. Speak, then stop mic test to submit turn.");
     } catch {
       setStatusMessage("Mic access failed. Check browser microphone permissions.");
       addDebugEvent("mic.start.failed");
@@ -775,17 +798,20 @@ function App() {
   return (
     <main className="layout">
       <header className="panel">
-        <div className="headerRow">
-          <h1>Family Translation Room</h1>
+        <h1 className="pageTitle">Family Translation</h1>
+        <div className="headerRow headerToolbar">
           <div className="actions">
-            <button onClick={() => setControlsExpanded((previous) => !previous)}>
+            <button type="button" onClick={() => setControlsExpanded((previous) => !previous)}>
               {controlsExpanded ? "Compact view" : "Show controls"}
             </button>
-            <button onClick={copyDebugBlob}>Copy Debug Blob</button>
+            <button type="button" onClick={copyDebugBlob}>
+              Copy debug blob
+            </button>
           </div>
+          <p className={`headerNet ${networkOnline ? "ok" : "warn"}`}>
+            {networkOnline ? "Online" : "Offline"}
+          </p>
         </div>
-        <p>Private EN ↔ JA speech-to-text translator with provider controls.</p>
-        <p className={networkOnline ? "ok" : "warn"}>{networkOnline ? "Online" : "Offline"}</p>
       </header>
 
       {controlsExpanded ? (
@@ -823,19 +849,24 @@ function App() {
         </section>
       ) : (
         <section className="panel compactSessionPanel">
-          <div className="compactSessionTop">
-            <span>
-              <strong>Room:</strong> {roomId.trim().toUpperCase() || "(not set)"}
-            </span>
-            <span>
-              <strong>Name:</strong> {displayName.trim() || "(not set)"}
-            </span>
-            <span>
-              <strong>Language:</strong> {language.toUpperCase()}
-            </span>
-            <span>
-              <strong>Audio cue:</strong> {hearAudio ? "on" : "off"}
-            </span>
+          <h2 className="roomInfoHeading">Room information</h2>
+          <div className="compactInfoGrid">
+            <div className="compactInfoCell">
+              <span className="compactInfoLabel">Room</span>
+              <span className="compactInfoValue">{roomId.trim().toUpperCase() || "—"}</span>
+            </div>
+            <div className="compactInfoCell">
+              <span className="compactInfoLabel">Name</span>
+              <span className="compactInfoValue">{displayName.trim() || "—"}</span>
+            </div>
+            <div className="compactInfoCell">
+              <span className="compactInfoLabel">Language</span>
+              <span className="compactInfoValue">{language.toUpperCase()}</span>
+            </div>
+            <div className="compactInfoCell">
+              <span className="compactInfoLabel">Audio cue</span>
+              <span className="compactInfoValue">{hearAudio ? "On" : "Off"}</span>
+            </div>
           </div>
           <div className="actions">
             <button onClick={connect} disabled={connected}>
@@ -848,10 +879,7 @@ function App() {
       )}
 
       <section className="panel">
-        <h2>Live Speech-to-Text</h2>
-        <p>
-          For this scaffold, speech packets are simulated through text input while the same websocket turn flow is used.
-        </p>
+        <h2>Live speech-to-text</h2>
         <div className="actions">
           <input
             value={textInput}
@@ -873,11 +901,8 @@ function App() {
             <button onClick={() => void stopMicTest()}>Stop mic test</button>
           )}
         </div>
-        <p>
-          Simulator sends random utterances every 15-45 seconds. Messages sent: {autoPilotRuns}
-          {nextAutoDelaySeconds ? ` (next in ~${nextAutoDelaySeconds}s)` : ""}
-        </p>
-        <p>Mic test state: {micTestActive ? "capturing audio" : "idle"}</p>
+        <p className="liveMetaLine">Messages sent: {autoPilotRuns}</p>
+        <p className="liveMetaLine">Mic test state: {micTestActive ? "capturing audio" : "idle"}</p>
       </section>
 
       {controlsExpanded ? (
@@ -960,14 +985,7 @@ function App() {
         <h2>Transcript</h2>
         <ul className="transcriptList">
           {sortedTranscripts.map((item) => (
-            <li key={`${item.turnId}-${item.timestamp}`}>
-              <strong>{item.targetLanguage.toUpperCase()}</strong> {new Date(item.timestamp).toLocaleTimeString()} -{" "}
-              {item.translatedText}
-              <details>
-                <summary>Show original</summary>
-                <p>{item.originalText}</p>
-              </details>
-            </li>
+            <TranscriptItem key={`${item.turnId}-${item.timestamp}`} item={item} />
           ))}
         </ul>
       </section>
