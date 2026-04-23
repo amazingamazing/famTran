@@ -172,11 +172,12 @@ export class RoomHub {
       this.activeTurns.delete(turnId);
       return;
     }
-    const transcription = await this.providers.transcribeSpeech({
+    const turnTranscription = await this.providers.transcribeForTurn({
       sourceLanguage: turn.sourceLanguage,
       chunks: turn.audioChunks,
       textHints: turn.textChunks
     });
+    const transcription = turnTranscription.result;
     const sourceText = transcription.value.trim();
     const sourceSpeaker = room.participants.get(turn.speakerId);
     if (!sourceSpeaker || sourceText.length === 0) {
@@ -318,7 +319,8 @@ export class RoomHub {
         path: transcription.path,
         detail: transcription.detail,
         audioChunkCount: turn.audioChunks.length,
-        textHintCount: turn.textChunks.length
+        textHintCount: turn.textChunks.length,
+        sttBenchmark: turnTranscription.sttBenchmark
       },
       participants: participantDebugRows
     });

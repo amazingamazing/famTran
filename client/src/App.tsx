@@ -590,6 +590,15 @@ function App() {
         addDebugEvent(
           `debug.turn turn=${event.turnId} stt=${event.transcription.path} participants=${participantSummary}`
         );
+        if (event.transcription.sttBenchmark?.length) {
+          for (const row of event.transcription.sttBenchmark) {
+            addDebugEvent(
+              `stt.bench turn=${event.turnId} id=${row.id} ${row.durationMs}ms path=${row.path}${
+                row.error ? ` err=${row.error}` : ""
+              }`
+            );
+          }
+        }
         return;
       }
       if (event.type === "error") {

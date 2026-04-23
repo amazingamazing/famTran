@@ -1,5 +1,15 @@
 export type SupportedLanguage = "en" | "ja";
 
+/** One parallel STT path result for STT_BENCHMARK=1; attached to debug.turn on the server. */
+export type SttBenchmarkRow = {
+  id: string;
+  path: string;
+  durationMs: number;
+  /** Truncated transcript for size */
+  text: string;
+  error?: string;
+};
+
 export type ProviderType = "deepgram" | "openai" | "gemini" | "cartesia";
 
 export type ClientMode = "text_only" | "full_audio";
@@ -61,6 +71,8 @@ export type ServerEvent =
         detail?: string;
         audioChunkCount: number;
         textHintCount: number;
+        /** Set when server STT_BENCHMARK=1: parallel model timings and preview text. */
+        sttBenchmark?: SttBenchmarkRow[];
       };
       participants: Array<{
         clientId: string;
