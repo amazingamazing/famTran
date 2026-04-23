@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import type { ClientEvent, ServerEvent, SupportedLanguage } from "@family-translation/shared";
 import type { WebSocket } from "ws";
 
+import { appConfig } from "./config.js";
+import { DgPcmStream } from "./deepgram-stream.js";
 import type { AppDb } from "./db.js";
-import type { ProviderPipeline, SynthesisResult } from "./providers.js";
+import type { ProviderPipeline, SynthesisResult, TranscribeForTurnOutput } from "./providers.js";
 
 type RoomParticipant = {
   clientId: string;
@@ -26,6 +28,8 @@ type ActiveTurn = {
   sourceLanguage: SupportedLanguage;
   audioChunks: Buffer[];
   textChunks: string[];
+  /** Set when non-hinted PCM is forwarded to Deepgram live (see {@link appConfig.sttStream}). */
+  dgStream: DgPcmStream | null;
 };
 
 const decodeTextHintPayload = (payloadBase64: string, sequence: number, isLast: boolean): string => {
@@ -117,7 +121,8 @@ export class RoomHub {
           speakerId: clientId,
           sourceLanguage: event.speakerLanguage,
           audioChunks: [],
-          textChunks: []
+          textChunks: [],
+          dgStream: null
         });
         return;
       case "audio.input": {
@@ -132,6 +137,14 @@ export class RoomHub {
         const textChunk = decodeTextHintPayload(event.payloadBase64, event.sequence, event.isLast);
         if (textChunk.length > 0) {
           turn.textChunks.push(textChunk);
+        } else if (chunkBytes && this.shouldSttStream()) {
+          const key = appConfig.apiKeys.deepgram;
+          if (key && this.providers.getProviders().stt === "deepgram") {
+            if (!turn.dgStream) {
+              turn.dgStream = new DgPcmStream(key, turn.sourceLanguage);
+            }
+            turn.dgStream.addChunk(chunkBytes);
+          }
         }
         return;
       }
@@ -172,11 +185,7 @@ export class RoomHub {
       this.activeTurns.delete(turnId);
       return;
     }
-    const turnTranscription = await this.providers.transcribeForTurn({
-      sourceLanguage: turn.sourceLanguage,
-      chunks: turn.audioChunks,
-      textHints: turn.textChunks
-    });
+    const turnTranscription = await this.resolveTranscription(turn);
     const transcription = turnTranscription.result;
     const sourceText = transcription.value.trim();
     const sourceSpeaker = room.participants.get(turn.speakerId);
@@ -325,6 +334,37 @@ export class RoomHub {
       participants: participantDebugRows
     });
     this.activeTurns.delete(turnId);
+  }
+
+  private shouldSttStream(): boolean {
+    return appConfig.sttStream && !appConfig.sttBenchmark;
+  }
+
+  private async resolveTranscription(turn: ActiveTurn): Promise<TranscribeForTurnOutput> {
+    const hinted = turn.textChunks.join(" ").trim().length > 0;
+    if (hinted) {
+      return this.providers.transcribeForTurn({
+        sourceLanguage: turn.sourceLanguage,
+        chunks: turn.audioChunks,
+        textHints: turn.textChunks
+      });
+    }
+    if (turn.dgStream) {
+      let streamValue = "";
+      try {
+        streamValue = (await turn.dgStream.close()).trim();
+      } catch {
+        // fall through to batch
+      }
+      if (streamValue.length > 0) {
+        return { result: { value: streamValue, path: "stt.deepgram_stream", detail: "live_websocket" } };
+      }
+    }
+    return this.providers.transcribeForTurn({
+      sourceLanguage: turn.sourceLanguage,
+      chunks: turn.audioChunks,
+      textHints: turn.textChunks
+    });
   }
 
   private ensureRoom(roomId: string): RoomState {

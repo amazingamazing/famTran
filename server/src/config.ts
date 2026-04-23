@@ -22,6 +22,8 @@ export const appConfig = {
     cartesia: process.env.CARTESIA_MODEL_ID ?? "sonic-2"
   },
   /** When true, each speech turn runs parallel STT (e.g. Deepgram models + OpenAI) and includes timings in debug.turn. Extra API cost. */
-  sttBenchmark: process.env.STT_BENCHMARK === "1" || process.env.STT_BENCHMARK === "true"
+  sttBenchmark: process.env.STT_BENCHMARK === "1" || process.env.STT_BENCHMARK === "true",
+  /** When true, mic PCM is sent to Deepgram over a live WebSocket; disabled automatically when sttBenchmark is on (batch-only benchmark). */
+  sttStream: process.env.STT_STREAM === "1" || process.env.STT_STREAM === "true"
 };
 
