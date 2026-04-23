@@ -24,6 +24,11 @@ export const appConfig = {
   /** When true, each speech turn runs parallel STT (e.g. Deepgram models + OpenAI) and includes timings in debug.turn. Extra API cost. */
   sttBenchmark: process.env.STT_BENCHMARK === "1" || process.env.STT_BENCHMARK === "true",
   /** When true, mic PCM is sent to Deepgram over a live WebSocket; disabled automatically when sttBenchmark is on (batch-only benchmark). */
-  sttStream: process.env.STT_STREAM === "1" || process.env.STT_STREAM === "true"
+  sttStream: process.env.STT_STREAM === "1" || process.env.STT_STREAM === "true",
+  /**
+   * When true (with sttStream + Deepgram), interim STT is debounce-translated and sent as `transcript.live` per participant.
+   * End-of-utterance `transcript.chunk` + TTS are unchanged.
+   */
+  liveCaptions: process.env.LIVE_CAPTIONS === "1" || process.env.LIVE_CAPTIONS === "true"
 };
 

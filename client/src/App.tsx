@@ -27,6 +27,16 @@ type TranscriptRow = {
   };
 };
 
+type LiveCaptionRow = {
+  turnId: string;
+  speakerId: string;
+  translatedText: string;
+  originalText: string;
+  targetLanguage: SupportedLanguage;
+  liveSeq: number;
+  timestamp: number;
+};
+
 type DebugTurnRow = Extract<ServerEvent, { type: "debug.turn" }>;
 
 function AudioUnlockButton({ onClick }: { onClick: () => void }) {
@@ -238,6 +248,7 @@ function App() {
   const [clientId, setClientId] = useState("");
   const [textInput, setTextInput] = useState("");
   const [transcripts, setTranscripts] = useState<TranscriptRow[]>([]);
+  const [liveCaption, setLiveCaption] = useState<LiveCaptionRow | null>(null);
   const [providerStt, setProviderStt] = useState<ProviderType>(initialProviderStt);
   const [providerTranslation, setProviderTranslation] = useState<ProviderType>(initialProviderTranslation);
   const [providerTts, setProviderTts] = useState<ProviderType>(initialProviderTts);
@@ -543,7 +554,28 @@ function App() {
         );
         return;
       }
+      if (event.type === "transcript.live") {
+        setLiveCaption((previous) => {
+          if (previous && previous.turnId === event.turnId && event.liveSeq < previous.liveSeq) {
+            return previous;
+          }
+          return {
+            turnId: event.turnId,
+            speakerId: event.speakerId,
+            translatedText: event.translatedText,
+            originalText: event.originalText,
+            targetLanguage: event.targetLanguage,
+            liveSeq: event.liveSeq,
+            timestamp: event.timestamp
+          };
+        });
+        addDebugEvent(
+          `transcript.live turn=${event.turnId} seq=${event.liveSeq} target=${event.targetLanguage}`
+        );
+        return;
+      }
       if (event.type === "transcript.chunk") {
+        setLiveCaption((previous) => (previous?.turnId === event.turnId ? null : previous));
         setTranscripts((previous) => [
           {
             turnId: event.turnId,
@@ -858,6 +890,7 @@ function App() {
         autoPilotRuns,
         nextAutoDelaySeconds,
         transcriptCount: transcripts.length,
+        liveCaption,
         providers: {
           stt: providerStt,
           translation: providerTranslation,
@@ -1092,6 +1125,15 @@ function App() {
           <h2>Transcript</h2>
           {!playbackUnlocked ? <AudioUnlockButton onClick={() => void unlockPlaybackAudio()} /> : null}
         </div>
+        {liveCaption ? (
+          <div className="transcriptLive" aria-live="polite">
+            <p className="transcriptLiveBadge">LIVE</p>
+            <p className="transcriptLiveMain">{liveCaption.translatedText}</p>
+            {liveCaption.translatedText.trim() === liveCaption.originalText.trim() ? null : (
+              <p className="transcriptLiveSub">{liveCaption.originalText}</p>
+            )}
+          </div>
+        ) : null}
         <ul className="transcriptList">
           {sortedTranscripts.map((item) => (
             <TranscriptItem key={`${item.turnId}-${item.timestamp}`} item={item} />

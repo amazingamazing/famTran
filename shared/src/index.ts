@@ -39,6 +39,19 @@ export type ServerEvent =
         ttsDetail?: string;
       };
     }
+  /** Streaming partial: STT + per-participant translation while a mic turn is in progress. Final utterance still arrives as transcript.chunk. */
+  | {
+      type: "transcript.live";
+      turnId: string;
+      roomId: string;
+      speakerId: string;
+      sourceLanguage: SupportedLanguage;
+      targetLanguage: SupportedLanguage;
+      originalText: string;
+      translatedText: string;
+      liveSeq: number;
+      timestamp: number;
+    }
   | {
       type: "audio.chunk";
       turnId: string;

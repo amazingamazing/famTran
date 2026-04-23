@@ -5,6 +5,11 @@ import type { SupportedLanguage } from "@family-translation/shared";
 const LIVE_URL = "wss://api.deepgram.com/v1/listen";
 const MODEL = "nova-3";
 
+export type DgPcmStreamOptions = {
+  /** Called with rolling estimated transcript (interim + finalized segments) while the socket is open. */
+  onTranscript?: (sourceText: string) => void;
+};
+
 /**
  * Pushes 16kHz linear16 mono PCM to Deepgram's live API and finalizes on {@link DgPcmStream.close}.
  * Uses the `ws` client with the same model/options as the batch HTTP `listen` path in providers.
@@ -18,11 +23,15 @@ export class DgPcmStream {
   private finished = false;
   private finalText: string | null = null;
   private readonly finals: string[] = [];
+  private readonly onTranscript?: (sourceText: string) => void;
 
   constructor(
     private readonly apiKey: string,
-    private readonly sourceLanguage: SupportedLanguage
-  ) {}
+    private readonly sourceLanguage: SupportedLanguage,
+    options: DgPcmStreamOptions = {}
+  ) {
+    this.onTranscript = options.onTranscript;
+  }
 
   addChunk(b: Buffer): void {
     if (this.finished) {
@@ -137,6 +146,15 @@ export class DgPcmStream {
     });
   }
 
+  private emitRollingDisplay(interimSegment: string): void {
+    if (!this.onTranscript) {
+      return;
+    }
+    const base = this.finals.join(" ");
+    const t = (base + (base && interimSegment ? " " : "") + interimSegment).trim();
+    this.onTranscript(t);
+  }
+
   private onMessage(data: WebSocket.RawData): void {
     let msg: { type?: string; is_final?: boolean; channel?: { alternatives?: Array<{ transcript?: string }> } };
     try {
@@ -154,12 +172,16 @@ export class DgPcmStream {
     if (msg.type !== "Results") {
       return;
     }
-    if (!msg.is_final) {
+    const seg = msg.channel?.alternatives?.[0]?.transcript?.trim() ?? "";
+    if (msg.is_final) {
+      if (seg.length > 0) {
+        this.finals.push(seg);
+      }
+      if (this.onTranscript) {
+        this.onTranscript(this.finals.join(" ").trim());
+      }
       return;
     }
-    const t = msg.channel?.alternatives?.[0]?.transcript?.trim() ?? "";
-    if (t.length > 0) {
-      this.finals.push(t);
-    }
+    this.emitRollingDisplay(seg);
   }
 }
