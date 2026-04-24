@@ -197,7 +197,6 @@ export class RoomHub {
     }
     this.clearLiveCaptionSchedule(turn);
     if (appConfig.liveCaptions && this.shouldSttStream() && turn.latestLiveSource.trim().length > 0) {
-      turn.liveSeq += 1;
       await this.flushLiveCaptions(turnId, turn.roomId);
     }
     const room = this.rooms.get(turn.roomId);
@@ -377,7 +376,6 @@ export class RoomHub {
       return;
     }
     turn.latestLiveSource = args.sourceText;
-    turn.liveSeq += 1;
     if (turn.liveDebounce) {
       clearTimeout(turn.liveDebounce);
     }
@@ -402,6 +400,9 @@ export class RoomHub {
       return;
     }
     const sourceSnapshot = sourceText;
+    // One sequence number per debounced flush (not per STT frame). Listener Gemini can finish after newer flushes;
+    // a per-frame liveSeq was invalidating almost all translated sends.
+    turn.liveSeq += 1;
     const seqAtStart = turn.liveSeq;
     const sourceSpeaker = room.participants.get(turn.speakerId);
     if (!sourceSpeaker) {
@@ -435,7 +436,7 @@ export class RoomHub {
     if (!this.activeTurns.get(turnId)) {
       return;
     }
-    if (turn.latestLiveSource.trim() !== sourceSnapshot || turn.liveSeq !== seqAtStart) {
+    if (turn.latestLiveSource.trim() !== sourceSnapshot) {
       return;
     }
     // Speaker: STT only — do not block on any listener's Gemini; otherwise no one saw partials.
@@ -454,16 +455,10 @@ export class RoomHub {
           targetLanguage: listener.language,
           context: translateContext
         });
-        const t2 = this.activeTurns.get(turnId);
-        if (!t2) {
+        if (!this.activeTurns.get(turnId)) {
           return;
         }
-        if (t2.liveSeq !== seqAtStart) {
-          return;
-        }
-        if (t2.latestLiveSource.trim() !== snap) {
-          return;
-        }
+        // No liveSeq / source snapshot guard: Gemini often returns after newer flushes; the client ignores lower liveSeq.
         sendLive(listener, translation.value);
       })();
     }
