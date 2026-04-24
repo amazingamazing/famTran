@@ -402,11 +402,11 @@ export class RoomHub {
       return;
     }
     const sourceSnapshot = sourceText;
+    const seqAtStart = turn.liveSeq;
     const sourceSpeaker = room.participants.get(turn.speakerId);
     if (!sourceSpeaker) {
       return;
     }
-    const liveSeq = turn.liveSeq;
 
     const glossaryLines = this.db
       .listGlossary(roomId)
@@ -417,32 +417,7 @@ export class RoomHub {
     const recentTurns = this.db.latestTurns(roomId);
     const translateContext = { glossaryLines, correctionLines, recentTurns };
 
-    const participants = [...room.participants.values()];
-    const rows = await Promise.all(
-      participants.map(async (participant) => {
-        const targetLanguage = participant.language;
-        const isSpeaker = participant.clientId === turn.speakerId;
-        if (isSpeaker) {
-          return { participant, translatedText: sourceSnapshot };
-        }
-        const translation = await this.providers.translateText({
-          sourceText: sourceSnapshot,
-          sourceLanguage: turn.sourceLanguage,
-          targetLanguage,
-          context: translateContext
-        });
-        return { participant, translatedText: translation.value };
-      })
-    );
-
-    if (!this.activeTurns.get(turnId)) {
-      return;
-    }
-    if (turn.latestLiveSource.trim() !== sourceSnapshot) {
-      return;
-    }
-    const ts = Date.now();
-    for (const { participant, translatedText } of rows) {
+    const sendLive = (participant: RoomParticipant, translatedText: string) => {
       this.send(participant.socket, {
         type: "transcript.live",
         turnId,
@@ -452,9 +427,45 @@ export class RoomHub {
         targetLanguage: participant.language,
         originalText: sourceSnapshot,
         translatedText,
-        liveSeq,
-        timestamp: ts
+        liveSeq: seqAtStart,
+        timestamp: Date.now()
       });
+    };
+
+    if (!this.activeTurns.get(turnId)) {
+      return;
+    }
+    if (turn.latestLiveSource.trim() !== sourceSnapshot || turn.liveSeq !== seqAtStart) {
+      return;
+    }
+    // Speaker: STT only — do not block on any listener's Gemini; otherwise no one saw partials.
+    sendLive(sourceSpeaker, sourceSnapshot);
+
+    for (const listener of room.participants.values()) {
+      if (listener.clientId === turn.speakerId) {
+        continue;
+      }
+      const srcLang = turn.sourceLanguage;
+      const snap = sourceSnapshot;
+      void (async () => {
+        const translation = await this.providers.translateText({
+          sourceText: snap,
+          sourceLanguage: srcLang,
+          targetLanguage: listener.language,
+          context: translateContext
+        });
+        const t2 = this.activeTurns.get(turnId);
+        if (!t2) {
+          return;
+        }
+        if (t2.liveSeq !== seqAtStart) {
+          return;
+        }
+        if (t2.latestLiveSource.trim() !== snap) {
+          return;
+        }
+        sendLive(listener, translation.value);
+      })();
     }
   }
 
