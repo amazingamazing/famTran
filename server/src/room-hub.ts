@@ -479,7 +479,7 @@ export class RoomHub {
     if (turn.latestLiveSource.trim() !== sourceSnapshot) {
       return;
     }
-    // Speaker self-monitor only: interim source text. Listeners get translation + TTS only on final transcript.chunk.
+    // Speaker self-monitor only: interim source text. Listeners receive phrase-final transcript.chunk + TTS while the turn is open when STT_STREAM is on.
     sendLive(sourceSpeaker, sourceSnapshot);
   }
 
@@ -580,7 +580,7 @@ export class RoomHub {
     };
 
     for (const row of turnRows) {
-      const { participant, targetLanguage, isSpeaker, translation, translatedText } = row;
+      const { participant, targetLanguage, translation, translatedText } = row;
       const listenerGetsTts = !isSpeaker && participant.hearAudio;
 
       this.db.insertTurn({

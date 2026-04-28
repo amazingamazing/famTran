@@ -71,12 +71,12 @@ Product choice for this app: **fast, partial source text for the speaker only**;
 | Path | When | Speaker | Listeners |
 |------|------|---------|-----------|
 | **Live STT** | While talking (`STT_STREAM` + `LIVE_CAPTIONS`) | Debounced **interim transcripts** (`transcript.live`) so they can read what the model thinks they said. | **No** `transcript.live`. Partial translations are confusing and often wrong; listeners should not see them. |
-| **Committed utterance** | After `turn.stop` / utterance end | Same final row as everyone in their language (passthrough source for self). | **`transcript.chunk`** with **final** translated text in **their** language. |
-| **Voice** | After commit | N/A (they already spoke). | **One-shot TTS per utterance**: a **single** `audio.chunk` per listener per turn (full utterance PCM/WAV). **No** streaming of TTS from partial translation inside one sentence — translate completes first, then synthesize the whole line once, then play. Sequential turns queue in the client **one sentence after another**. |
+| **Phrase-final (streaming)** | After each Deepgram `is_final` slice while mic is open (`STT_STREAM=1`) | Same live draft as above until that phrase locks. | **`transcript.chunk`** + **`audio.chunk`** for **that phrase only** (one translate + one TTS per phrase). |
+| **Turn end** | After `turn.stop` | May receive a **final short remainder** chunk if the closing transcript extends the last phrase. | **`debug.turn`** summarizes the full utterance; no duplicate TTS if phrases already covered the transcript. |
 
 Optional **`UTTERANCE_COMMIT_DELAY_MS`** on the server: short pause after the client ends the turn (before resolving STT → translate → TTS) so trailing streaming STT frames can settle; tune per language (e.g. ~1000–1500 ms for Japanese) without changing client code. Default 0 keeps dev/tests snappy.
 
-One TTS generation per (utterance × target language), fanned out to all listeners sharing that language. One translation call per (utterance × target language) too. A 4-person 2-EN/2-JA room thus produces **1 STT + 1 translate + 1 TTS = one pipeline pass per utterance**. A 3-language room would be 1 STT + 2 translate + 2 TTS — still cheap.
+Each **phrase** that Deepgram finalizes during streaming triggers **one** translate + **one** TTS per target language; the client queues clips in order. A long monologue is many such passes; a single burst with no internal `is_final` is still **one** pass at `turn.stop`.
 
 ## Latency budget, in real numbers
 
