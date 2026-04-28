@@ -33,6 +33,10 @@ type ActiveTurn = {
   latestLiveSource: string;
   liveSeq: number;
   liveDebounce: ReturnType<typeof setTimeout> | null;
+  /** Source text already delivered via {@link DgPcmStream} `is_final` phrase commits (normalized join). */
+  committedStreamSource: string;
+  /** Serializes phrase-final translate+TTS so order is preserved and completeTurn can await drain. */
+  segmentPipeline: Promise<void>;
 };
 
 const decodeTextHintPayload = (payloadBase64: string, sequence: number, isLast: boolean): string => {
@@ -130,7 +134,9 @@ export class RoomHub {
           dgStream: null,
           latestLiveSource: "",
           liveSeq: 0,
-          liveDebounce: null
+          liveDebounce: null,
+          committedStreamSource: "",
+          segmentPipeline: Promise.resolve()
         });
         return;
       case "audio.input": {
@@ -157,7 +163,10 @@ export class RoomHub {
                   ? (sourceText: string) => {
                       this.scheduleLiveCaption({ turnId: tId, roomId: rId, sourceText });
                     }
-                  : undefined
+                  : undefined,
+                onFinalSegment: (segmentText: string) => {
+                  this.queueStreamSegmentCommit({ turnId: tId, roomId: rId, segmentText });
+                }
               });
             }
             turn.dgStream.addChunk(chunkBytes);
@@ -209,13 +218,49 @@ export class RoomHub {
       this.activeTurns.delete(turnId);
       return;
     }
+
+    await turn.segmentPipeline.catch(() => undefined);
+    if (turn.committedStreamSource.trim().length > 0 && appConfig.streamSegmentSettleMs > 0) {
+      await sleepMs(appConfig.streamSegmentSettleMs);
+    }
+
     const turnTranscription = await this.resolveTranscription(turn);
     const transcription = turnTranscription.result;
-    const sourceText = transcription.value.trim();
+    const fullSourceText = transcription.value.trim();
     const sourceSpeaker = room.participants.get(turn.speakerId);
-    if (!sourceSpeaker || sourceText.length === 0) {
+    if (!sourceSpeaker || fullSourceText.length === 0) {
       this.activeTurns.delete(turnId);
       return;
+    }
+
+    const committed = turn.committedStreamSource.trim();
+    let effectiveSource = fullSourceText;
+    if (committed.length > 0) {
+      if (fullSourceText === committed) {
+        await this.finalizeStreamedTurnDebugOnly({
+          turnId,
+          room,
+          turn,
+          fullSourceText,
+          turnTranscription
+        });
+        return;
+      }
+      if (fullSourceText.startsWith(committed)) {
+        let remainder = fullSourceText.slice(committed.length).trim();
+        remainder = remainder.replace(/^[\s.,;!?、。，]+/u, "").trim();
+        if (remainder.length === 0) {
+          await this.finalizeStreamedTurnDebugOnly({
+            turnId,
+            room,
+            turn,
+            fullSourceText,
+            turnTranscription
+          });
+          return;
+        }
+        effectiveSource = remainder;
+      }
     }
 
     const glossaryLines = this.db
@@ -235,12 +280,12 @@ export class RoomHub {
         const isSpeaker = participant.clientId === turn.speakerId;
         const translation = isSpeaker
           ? {
-              value: sourceText,
+              value: effectiveSource,
               path: "translation.self_passthrough",
               detail: "speaker_receives_source_text"
             }
           : await this.providers.translateText({
-              sourceText,
+              sourceText: effectiveSource,
               sourceLanguage: turn.sourceLanguage,
               targetLanguage,
               context: translateContext
@@ -296,7 +341,7 @@ export class RoomHub {
         turnId,
         speakerId: sourceSpeaker.clientId,
         sourceLanguage: turn.sourceLanguage,
-        sourceText,
+        sourceText: effectiveSource,
         targetLanguage,
         targetText: translatedText
       });
@@ -308,7 +353,7 @@ export class RoomHub {
         sourceLanguage: turn.sourceLanguage,
         targetLanguage,
         translatedText,
-        originalText: sourceText,
+        originalText: effectiveSource,
         isFinal: true,
         timestamp: Date.now(),
         debug: {
@@ -346,7 +391,7 @@ export class RoomHub {
       roomId: turn.roomId,
       speakerId: sourceSpeaker.clientId,
       sourceLanguage: turn.sourceLanguage,
-      originalText: sourceText,
+      originalText: fullSourceText,
       timestamp: Date.now(),
       transcription: {
         path: transcription.path,
@@ -436,6 +481,200 @@ export class RoomHub {
     }
     // Speaker self-monitor only: interim source text. Listeners get translation + TTS only on final transcript.chunk.
     sendLive(sourceSpeaker, sourceSnapshot);
+  }
+
+  private queueStreamSegmentCommit(args: { turnId: string; roomId: string; segmentText: string }) {
+    const turn = this.activeTurns.get(args.turnId);
+    if (!turn || !this.shouldSttStream()) {
+      return;
+    }
+    const segment = args.segmentText.trim();
+    if (!segment) {
+      return;
+    }
+    turn.segmentPipeline = turn.segmentPipeline
+      .catch(() => undefined)
+      .then(() => this.deliverCommittedPhrase({ turnId: args.turnId, roomId: args.roomId, segmentText: segment }));
+  }
+
+  private async deliverCommittedPhrase(args: { turnId: string; roomId: string; segmentText: string }) {
+    const turn = this.activeTurns.get(args.turnId);
+    if (!turn) {
+      return;
+    }
+    const room = this.rooms.get(args.roomId);
+    if (!room) {
+      return;
+    }
+    const sourceSpeaker = room.participants.get(turn.speakerId);
+    if (!sourceSpeaker) {
+      return;
+    }
+
+    const sourceText = args.segmentText;
+    const glossaryLines = this.db
+      .listGlossary(turn.roomId)
+      .map((entry) => `${entry.term} -> ${entry.translation} (${entry.notes})`);
+    const correctionLines = this.db
+      .latestCorrections(turn.roomId)
+      .map((entry) => `${entry.wrongText} => ${entry.rightText} (${entry.context})`);
+    const recentTurns = this.db.latestTurns(turn.roomId);
+    const participants = [...room.participants.values()];
+    const translateContext = { glossaryLines, correctionLines, recentTurns };
+
+    const turnRows = await Promise.all(
+      participants.map(async (participant) => {
+        const targetLanguage = participant.language;
+        const isSpeaker = participant.clientId === turn.speakerId;
+        const translation = isSpeaker
+          ? {
+              value: sourceText,
+              path: "translation.self_passthrough",
+              detail: "speaker_receives_source_text"
+            }
+          : await this.providers.translateText({
+              sourceText,
+              sourceLanguage: turn.sourceLanguage,
+              targetLanguage,
+              context: translateContext
+            });
+        return { participant, targetLanguage, isSpeaker, translation, translatedText: translation.value };
+      })
+    );
+
+    const ttsKey = (lang: SupportedLanguage, text: string) => `${lang}::${text}`;
+    const ttsCache = new Map<string, SynthesisResult>();
+    const ttsInFlight = new Map<string, Promise<SynthesisResult>>();
+
+    const getOrSynthesize = async (text: string, ttsLanguage: SupportedLanguage) => {
+      const key = ttsKey(ttsLanguage, text);
+      const cached = ttsCache.get(key);
+      if (cached) {
+        return cached;
+      }
+      const pending = ttsInFlight.get(key);
+      if (pending) {
+        return pending;
+      }
+      const p = this.providers
+        .synthesizeSpeech({ text, targetLanguage: ttsLanguage, speakerId: sourceSpeaker.clientId })
+        .then((speech) => {
+          ttsInFlight.delete(key);
+          ttsCache.set(key, speech);
+          return speech;
+        });
+      ttsInFlight.set(key, p);
+      return p;
+    };
+
+    const sendPcm = (recipient: RoomParticipant, ttsLanguage: SupportedLanguage, speech: SynthesisResult) => {
+      this.send(recipient.socket, {
+        type: "audio.chunk",
+        turnId: args.turnId,
+        targetLanguage: ttsLanguage,
+        mimeType: speech.mimeType,
+        payloadBase64: speech.value,
+        sequence: 0,
+        isLast: true
+      });
+    };
+
+    for (const row of turnRows) {
+      const { participant, targetLanguage, isSpeaker, translation, translatedText } = row;
+      const listenerGetsTts = !isSpeaker && participant.hearAudio;
+
+      this.db.insertTurn({
+        roomId: turn.roomId,
+        turnId: args.turnId,
+        speakerId: sourceSpeaker.clientId,
+        sourceLanguage: turn.sourceLanguage,
+        sourceText,
+        targetLanguage,
+        targetText: translatedText
+      });
+
+      this.send(participant.socket, {
+        type: "transcript.chunk",
+        turnId: args.turnId,
+        speakerId: sourceSpeaker.clientId,
+        sourceLanguage: turn.sourceLanguage,
+        targetLanguage,
+        translatedText,
+        originalText: sourceText,
+        isFinal: true,
+        timestamp: Date.now(),
+        debug: {
+          transcriptionPath: "stt.deepgram_stream",
+          transcriptionDetail: "phrase_final",
+          translationPath: translation.path,
+          translationDetail: translation.detail,
+          ttsPath: listenerGetsTts ? "tts.deferred" : undefined
+        }
+      });
+
+      if (listenerGetsTts) {
+        void (async () => {
+          const speech = await getOrSynthesize(translatedText, targetLanguage);
+          sendPcm(participant, targetLanguage, speech);
+        })();
+      }
+    }
+
+    const tail = this.activeTurns.get(args.turnId);
+    if (tail) {
+      const acc = tail.committedStreamSource.trim();
+      const piece = sourceText.trim();
+      tail.committedStreamSource = acc ? `${acc} ${piece}` : piece;
+    }
+  }
+
+  private async finalizeStreamedTurnDebugOnly(args: {
+    turnId: string;
+    room: RoomState;
+    turn: ActiveTurn;
+    fullSourceText: string;
+    turnTranscription: TranscribeForTurnOutput;
+  }) {
+    const sourceSpeaker = args.room.participants.get(args.turn.speakerId);
+    if (!sourceSpeaker) {
+      this.activeTurns.delete(args.turnId);
+      return;
+    }
+    const transcription = args.turnTranscription.result;
+    const participants = [...args.room.participants.values()];
+    const participantDebugRows = participants.map((participant) => ({
+      clientId: participant.clientId,
+      displayName: participant.displayName,
+      targetLanguage: participant.language,
+      isSpeaker: participant.clientId === args.turn.speakerId,
+      hearAudio: participant.hearAudio,
+      translatedText:
+        participant.clientId === args.turn.speakerId
+          ? args.fullSourceText
+          : "(earlier phrases committed during stream)",
+      translationPath: "turn.segment_commits_only",
+      translationDetail: undefined,
+      ttsPath: undefined
+    }));
+
+    this.broadcastToAll({
+      type: "debug.turn",
+      turnId: args.turnId,
+      roomId: args.room.roomId,
+      speakerId: sourceSpeaker.clientId,
+      sourceLanguage: args.turn.sourceLanguage,
+      originalText: args.fullSourceText,
+      timestamp: Date.now(),
+      transcription: {
+        path: transcription.path,
+        detail: transcription.detail,
+        audioChunkCount: args.turn.audioChunks.length,
+        textHintCount: args.turn.textChunks.length,
+        sttBenchmark: args.turnTranscription.sttBenchmark
+      },
+      participants: participantDebugRows
+    });
+    this.activeTurns.delete(args.turnId);
   }
 
   private async resolveTranscription(turn: ActiveTurn): Promise<TranscribeForTurnOutput> {

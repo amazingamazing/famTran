@@ -8,6 +8,8 @@ const MODEL = "nova-3";
 export type DgPcmStreamOptions = {
   /** Called with rolling estimated transcript (interim + finalized segments) while the socket is open. */
   onTranscript?: (sourceText: string) => void;
+  /** One phrase when Deepgram marks `is_final` (utterance slice). Used to translate/TTS before stop. */
+  onFinalSegment?: (segmentText: string) => void;
 };
 
 /**
@@ -24,6 +26,7 @@ export class DgPcmStream {
   private finalText: string | null = null;
   private readonly finals: string[] = [];
   private readonly onTranscript?: (sourceText: string) => void;
+  private readonly onFinalSegment?: (segmentText: string) => void;
 
   constructor(
     private readonly apiKey: string,
@@ -31,6 +34,7 @@ export class DgPcmStream {
     options: DgPcmStreamOptions = {}
   ) {
     this.onTranscript = options.onTranscript;
+    this.onFinalSegment = options.onFinalSegment;
   }
 
   addChunk(b: Buffer): void {
@@ -176,6 +180,7 @@ export class DgPcmStream {
     if (msg.is_final) {
       if (seg.length > 0) {
         this.finals.push(seg);
+        this.onFinalSegment?.(seg);
       }
       if (this.onTranscript) {
         this.onTranscript(this.finals.join(" ").trim());

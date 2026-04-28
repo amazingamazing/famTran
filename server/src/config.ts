@@ -34,6 +34,10 @@ export const appConfig = {
    * Optional pause (ms) after `turn.stop` before STT resolve → translate → TTS. Gives streaming STT time to settle; e.g. 1000–1500 for JA.
    * Default 0 for fast dev/tests.
    */
-  utteranceCommitDelayMs: Math.max(0, Number(process.env.UTTERANCE_COMMIT_DELAY_MS ?? 0) || 0)
+  utteranceCommitDelayMs: Math.max(0, Number(process.env.UTTERANCE_COMMIT_DELAY_MS ?? 0) || 0),
+  /**
+   * After last `is_final` Deepgram phrase, brief wait before closing the stream so a trailing final can enqueue. Only used when phrase commits ran during the turn.
+   */
+  streamSegmentSettleMs: Math.max(0, Number(process.env.STREAM_SEGMENT_SETTLE_MS ?? 250) || 0)
 };
 
