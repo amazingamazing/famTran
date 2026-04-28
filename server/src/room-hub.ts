@@ -73,6 +73,8 @@ const decodeAudioBytes = (payloadBase64: string): Buffer | null => {
   }
 };
 
+const sleepMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export class RoomHub {
   private readonly rooms = new Map<string, RoomState>();
   private readonly clientToRoom = new Map<string, string>();
@@ -198,6 +200,9 @@ export class RoomHub {
     this.clearLiveCaptionSchedule(turn);
     if (appConfig.liveCaptions && this.shouldSttStream() && turn.latestLiveSource.trim().length > 0) {
       await this.flushLiveCaptions(turnId, turn.roomId);
+    }
+    if (appConfig.utteranceCommitDelayMs > 0) {
+      await sleepMs(appConfig.utteranceCommitDelayMs);
     }
     const room = this.rooms.get(turn.roomId);
     if (!room) {
@@ -400,23 +405,13 @@ export class RoomHub {
       return;
     }
     const sourceSnapshot = sourceText;
-    // One sequence number per debounced flush (not per STT frame). Listener Gemini can finish after newer flushes;
-    // a per-frame liveSeq was invalidating almost all translated sends.
+    // One sequence number per debounced flush (not per STT frame).
     turn.liveSeq += 1;
     const seqAtStart = turn.liveSeq;
     const sourceSpeaker = room.participants.get(turn.speakerId);
     if (!sourceSpeaker) {
       return;
     }
-
-    const glossaryLines = this.db
-      .listGlossary(roomId)
-      .map((entry) => `${entry.term} -> ${entry.translation} (${entry.notes})`);
-    const correctionLines = this.db
-      .latestCorrections(roomId)
-      .map((entry) => `${entry.wrongText} => ${entry.rightText} (${entry.context})`);
-    const recentTurns = this.db.latestTurns(roomId);
-    const translateContext = { glossaryLines, correctionLines, recentTurns };
 
     const sendLive = (participant: RoomParticipant, translatedText: string) => {
       this.send(participant.socket, {
@@ -439,29 +434,8 @@ export class RoomHub {
     if (turn.latestLiveSource.trim() !== sourceSnapshot) {
       return;
     }
-    // Speaker: STT only — do not block on any listener's Gemini; otherwise no one saw partials.
+    // Speaker self-monitor only: interim source text. Listeners get translation + TTS only on final transcript.chunk.
     sendLive(sourceSpeaker, sourceSnapshot);
-
-    for (const listener of room.participants.values()) {
-      if (listener.clientId === turn.speakerId) {
-        continue;
-      }
-      const srcLang = turn.sourceLanguage;
-      const snap = sourceSnapshot;
-      void (async () => {
-        const translation = await this.providers.translateText({
-          sourceText: snap,
-          sourceLanguage: srcLang,
-          targetLanguage: listener.language,
-          context: translateContext
-        });
-        if (!this.activeTurns.get(turnId)) {
-          return;
-        }
-        // No liveSeq / source snapshot guard: Gemini often returns after newer flushes; the client ignores lower liveSeq.
-        sendLive(listener, translation.value);
-      })();
-    }
   }
 
   private async resolveTranscription(turn: ActiveTurn): Promise<TranscribeForTurnOutput> {

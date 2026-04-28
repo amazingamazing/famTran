@@ -64,6 +64,18 @@ Everything else — persistence, auth, room codes — goes in SQLite, and the "a
 
 Key architectural choice: **STT is server-side**, not client. Web Speech API on iOS Safari is a non-starter — it routes to Apple's server-side ASR with no streaming partials guarantee, no control over model, and historically flaky inside installed PWAs. You own the audio path from Worklet to server.
 
+### Utterance commit: what listeners see vs what the speaker sees
+
+Product choice for this app: **fast, partial source text for the speaker only**; **stable translated text + voice for everyone else**.
+
+| Path | When | Speaker | Listeners |
+|------|------|---------|-----------|
+| **Live STT** | While talking (`STT_STREAM` + `LIVE_CAPTIONS`) | Debounced **interim transcripts** (`transcript.live`) so they can read what the model thinks they said. | **No** `transcript.live`. Partial translations are confusing and often wrong; listeners should not see them. |
+| **Committed utterance** | After `turn.stop` / utterance end | Same final row as everyone in their language (passthrough source for self). | **`transcript.chunk`** with **final** translated text in **their** language. |
+| **Voice** | After commit | N/A (they already spoke). | **One-shot TTS per utterance**: a **single** `audio.chunk` per listener per turn (full utterance PCM/WAV). **No** streaming of TTS from partial translation inside one sentence — translate completes first, then synthesize the whole line once, then play. Sequential turns queue in the client **one sentence after another**. |
+
+Optional **`UTTERANCE_COMMIT_DELAY_MS`** on the server: short pause after the client ends the turn (before resolving STT → translate → TTS) so trailing streaming STT frames can settle; tune per language (e.g. ~1000–1500 ms for Japanese) without changing client code. Default 0 keeps dev/tests snappy.
+
 One TTS generation per (utterance × target language), fanned out to all listeners sharing that language. One translation call per (utterance × target language) too. A 4-person 2-EN/2-JA room thus produces **1 STT + 1 translate + 1 TTS = one pipeline pass per utterance**. A 3-language room would be 1 STT + 2 translate + 2 TTS — still cheap.
 
 ## Latency budget, in real numbers
@@ -122,7 +134,7 @@ This is comfortably under "a few hundred dollars." If your real volume lands at 
 Claude-in-Cursor will one-shot or near-one-shot most of this. The gotchas cluster on iOS Safari PWA behavior and WebSocket-audio plumbing — those need a human with a phone in hand, not just Cursor.
 
 **One-shot territory** (Cursor will nail it on the first or second prompt):
-- Vite + React + TypeScript scaffold, `vite-plugin-pwa` manifest, room-code generation, basic Fastify + `ws` server, SQLite schema, Deepgram WebSocket client in Node, Gemini API call with streaming, Cartesia WebSocket client, QR code generation (use `qrcode` npm package on an `/r/:id` landing page).
+- Vite + React + TypeScript scaffold, `vite-plugin-pwa` manifest, room-code generation, basic Fastify + `ws` server, SQLite schema, Deepgram WebSocket client in Node, Gemini translate per committed utterance (full string in, full string out), Cartesia HTTP/bytes one-shot TTS per line, QR code generation (use `qrcode` npm package on an `/r/:id` landing page).
 - React UI for per-user language picker, hear-audio toggle, context-box textarea, live-transcript list, PTT button.
 - Room-level state machine on the server.
 
@@ -136,7 +148,7 @@ Claude-in-Cursor will one-shot or near-one-shot most of this. The gotchas cluste
 **Real plumbing work** (Claude writes it, you debug over a day or two):
 - **Streaming WebSocket audio with backpressure.** Node `ws` doesn't apply TCP-level backpressure automatically when you write faster than the client drains. Watch `ws.bufferedAmount` before pushing next TTS frame; drop or coalesce if it grows.
 - **Reconnection with session resume.** When the iPhone backgrounds and returns, the WS is often dead. Implement resumable sessions keyed by a client-side token; server replays the last N transcript events on reconnect.
-- **Piping Gemini tokens → Cartesia in real time.** Both support streaming; you want to shovel text from Gemini's SSE into Cartesia's WSS as chunks arrive. Cartesia's WebSocket supports text-in streaming — use it; don't wait for Gemini to finish.
+- **Piping Gemini tokens → Cartesia in real time.** This app **does not** stream translation into TTS mid-utterance: one committed sentence → one translate call → one Cartesia (or OpenAI) synthesis. If you later want minimum latency for other products, you could shovel Gemini stream into Cartesia's streaming input; that is intentionally out of scope here.
 
 **Genuinely tricky** (plan for a day of yak-shaving):
 - **silero-vad in a PWA on iOS.** The library works in Safari, but you need to serve the ONNX model and Worklet bundle from your origin (not jsDelivr) for PWA offline-install reliability, and tune thresholds for Japanese. If it fights back, ship with PTT default-on.
@@ -185,9 +197,9 @@ Nine steps, roughly a weekend each if you're working evenings, tighter if you go
 
 4. **Add silero-vad + PTT toggle.** VAD drives start/stop of the STT window on the client; PTT button as manual override. Tune Japanese thresholds with your actual family voices.
 
-5. **Wire Gemini 2.5 Flash translation.** Streaming. For now, hardcode a two-user EN↔JA room. Display the streamed translation in the listener's transcript UI as tokens arrive. This is where you prove the aggressive-latency feel.
+5. **Wire Gemini 2.5 Flash translation.** Use **non-streaming translation per committed utterance** for listeners (one complete target string per turn). The speaker may still see **streaming source** STT in their own UI only; listeners only see the final `transcript.chunk`.
 
-6. **Wire Cartesia Sonic-2 TTS.** Assign the first 6 JA voices to speaker slots. Pipe Gemini output tokens into Cartesia's WebSocket text-in stream; pipe the audio frames back over your WebSocket to the listener's `AudioContext`. Playback scheduler that queues `AudioBuffer`s with a small jitter buffer (~80 ms).
+6. **Wire Cartesia Sonic-2 TTS.** Assign the first 6 JA voices to speaker slots. For each committed translated line, call TTS **once** for the full string; send **one** audio payload per listener per turn over your WebSocket. Client playback queues clips **sequentially** (sentence by sentence). Optional small jitter buffer (~80 ms) only if measuring underruns on device.
 
 7. **Context box + glossary injection.** Per-user textarea in settings; persisted to SQLite; merged into the Gemini system prompt. Add a "fix this" affordance on transcript rows that writes to `corrections`.
 

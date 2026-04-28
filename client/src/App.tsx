@@ -246,6 +246,7 @@ function App() {
   const [hearAudio, setHearAudio] = useState(() => getCookieBoolean("family_translation_hear_audio", true));
   const [connected, setConnected] = useState(false);
   const [clientId, setClientId] = useState("");
+  const clientIdRef = useRef("");
   const [textInput, setTextInput] = useState("");
   const [transcripts, setTranscripts] = useState<TranscriptRow[]>([]);
   const [liveCaption, setLiveCaption] = useState<LiveCaptionRow | null>(null);
@@ -536,6 +537,7 @@ function App() {
       }
       if (event.type === "session.joined") {
         setConnected(true);
+        clientIdRef.current = event.clientId;
         setClientId(event.clientId);
         setStatusMessage(`Joined room ${event.roomId}`);
         addDebugEvent(`session.joined room=${event.roomId} client=${event.clientId}`);
@@ -555,6 +557,9 @@ function App() {
         return;
       }
       if (event.type === "transcript.live") {
+        if (event.speakerId !== clientIdRef.current) {
+          return;
+        }
         setLiveCaption((previous) => {
           if (previous && previous.turnId === event.turnId && event.liveSeq < previous.liveSeq) {
             return previous;
@@ -588,17 +593,6 @@ function App() {
           },
           ...previous
         ]);
-        if (hearAudio && event.speakerId !== clientId) {
-          const audioContext = new AudioContext();
-          const oscillator = audioContext.createOscillator();
-          const gain = audioContext.createGain();
-          gain.gain.value = 0.02;
-          oscillator.frequency.value = 880;
-          oscillator.connect(gain);
-          gain.connect(audioContext.destination);
-          oscillator.start();
-          oscillator.stop(audioContext.currentTime + 0.06);
-        }
         addDebugEvent(
           `transcript.chunk turn=${event.turnId} final=${event.isFinal} stt=${event.debug?.transcriptionPath ?? "n/a"} tx=${event.debug?.translationPath ?? "n/a"} tts=${event.debug?.ttsPath ?? "n/a"}`
         );
@@ -971,7 +965,7 @@ function App() {
             </select>
           </label>
           <label>
-            Hear translated audio cue
+            Hear translated audio (TTS)
             <input type="checkbox" checked={hearAudio} onChange={(event) => setHearAudio(event.target.checked)} />
           </label>
           <label className="full">
@@ -1003,7 +997,7 @@ function App() {
               <span className="compactInfoValue">{language.toUpperCase()}</span>
             </div>
             <div className="compactInfoCell">
-              <span className="compactInfoLabel">Audio cue</span>
+              <span className="compactInfoLabel">TTS</span>
               <span className="compactInfoValue">{hearAudio ? "On" : "Off"}</span>
             </div>
           </div>
@@ -1127,7 +1121,7 @@ function App() {
         </div>
         {liveCaption ? (
           <div className="transcriptLive" aria-live="polite">
-            <p className="transcriptLiveBadge">LIVE</p>
+            <p className="transcriptLiveBadge">Your speech (live draft)</p>
             <p className="transcriptLiveMain">{liveCaption.translatedText}</p>
             {liveCaption.translatedText.trim() === liveCaption.originalText.trim() ? null : (
               <p className="transcriptLiveSub">{liveCaption.originalText}</p>

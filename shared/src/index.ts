@@ -39,7 +39,10 @@ export type ServerEvent =
         ttsDetail?: string;
       };
     }
-  /** Streaming partial: STT + per-participant translation while a mic turn is in progress. Final utterance still arrives as transcript.chunk. */
+  /**
+   * Streaming partial: **speaker only** — debounced interim STT (same string in originalText and translatedText for passthrough).
+   * Listeners do not receive this; they only get final `transcript.chunk` + `audio.chunk` after the utterance commits.
+   */
   | {
       type: "transcript.live";
       turnId: string;

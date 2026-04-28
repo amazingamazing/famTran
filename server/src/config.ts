@@ -26,9 +26,14 @@ export const appConfig = {
   /** When true, mic PCM is sent to Deepgram over a live WebSocket; disabled automatically when sttBenchmark is on (batch-only benchmark). */
   sttStream: process.env.STT_STREAM === "1" || process.env.STT_STREAM === "true",
   /**
-   * When true (with sttStream + Deepgram), interim STT is debounce-translated and sent as `transcript.live` per participant.
-   * End-of-utterance `transcript.chunk` + TTS are unchanged.
+   * When true (with sttStream + Deepgram), debounced interim STT is sent as `transcript.live` to the **speaker only** (self-monitor).
+   * Listeners only receive final `transcript.chunk` + one-shot `audio.chunk` after `turn.stop`.
    */
-  liveCaptions: process.env.LIVE_CAPTIONS === "1" || process.env.LIVE_CAPTIONS === "true"
+  liveCaptions: process.env.LIVE_CAPTIONS === "1" || process.env.LIVE_CAPTIONS === "true",
+  /**
+   * Optional pause (ms) after `turn.stop` before STT resolve → translate → TTS. Gives streaming STT time to settle; e.g. 1000–1500 for JA.
+   * Default 0 for fast dev/tests.
+   */
+  utteranceCommitDelayMs: Math.max(0, Number(process.env.UTTERANCE_COMMIT_DELAY_MS ?? 0) || 0)
 };
 
