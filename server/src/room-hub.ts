@@ -581,7 +581,7 @@ export class RoomHub {
 
     for (const row of turnRows) {
       const { participant, targetLanguage, translation, translatedText } = row;
-      const listenerGetsTts = !isSpeaker && participant.hearAudio;
+      const listenerGetsTts = participant.clientId !== turn.speakerId && participant.hearAudio;
 
       this.db.insertTurn({
         roomId: turn.roomId,
