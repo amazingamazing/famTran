@@ -108,6 +108,16 @@ export class RoomHub {
   }
 
   leave(clientId: string) {
+    for (const [turnId, turn] of [...this.activeTurns.entries()]) {
+      if (turn.speakerId === clientId) {
+        this.clearLiveCaptionSchedule(turn);
+        if (turn.dgStream) {
+          void turn.dgStream.close().catch(() => undefined);
+        }
+        this.activeTurns.delete(turnId);
+      }
+    }
+
     const roomId = this.clientToRoom.get(clientId);
     if (!roomId) {
       return;
@@ -141,7 +151,7 @@ export class RoomHub {
         return;
       case "audio.input": {
         const turn = this.activeTurns.get(event.turnId);
-        if (!turn) {
+        if (!turn || turn.speakerId !== clientId) {
           return;
         }
         const chunkBytes = decodeAudioBytes(event.payloadBase64);
@@ -159,6 +169,8 @@ export class RoomHub {
               const rId = event.roomId;
               const live = this.shouldLiveCaptions();
               turn.dgStream = new DgPcmStream(key, turn.sourceLanguage, {
+                endpointingMs:
+                  appConfig.deepgramLiveEndpointingMs > 0 ? appConfig.deepgramLiveEndpointingMs : undefined,
                 onTranscript: live
                   ? (sourceText: string) => {
                       this.scheduleLiveCaption({ turnId: tId, roomId: rId, sourceText });

@@ -38,6 +38,11 @@ export const appConfig = {
   /**
    * After last `is_final` Deepgram phrase, brief wait before closing the stream so a trailing final can enqueue. Only used when phrase commits ran during the turn.
    */
-  streamSegmentSettleMs: Math.max(0, Number(process.env.STREAM_SEGMENT_SETTLE_MS ?? 250) || 0)
+  streamSegmentSettleMs: Math.max(0, Number(process.env.STREAM_SEGMENT_SETTLE_MS ?? 250) || 0),
+  /**
+   * Live STT only: silence duration (ms) before Deepgram marks an `is_final` phrase. Higher → fewer phrase breaks but later delivery.
+   * 0 = use Deepgram default. Try 500–900 if short pauses (e.g. after questions) split one grammatical sentence.
+   */
+  deepgramLiveEndpointingMs: Math.max(0, Number(process.env.DEEPGRAM_LIVE_ENDPOINTING_MS ?? 0) || 0)
 };
 

@@ -239,6 +239,7 @@ function App() {
   const micSequenceRef = useRef(0);
   const autoConnectAttemptedRef = useRef(false);
   const connectRef = useRef<() => void>(() => undefined);
+  const stopMicTestRef = useRef<() => Promise<void>>(async () => {});
   const [roomId, setRoomId] = useState(() => getCookie("family_translation_room_id"));
   const [displayName, setDisplayName] = useState(() => getCookie("family_translation_display_name"));
   const [language, setLanguage] = useState<SupportedLanguage>(initialLanguage);
@@ -635,11 +636,12 @@ function App() {
 
     ws.onclose = () => {
       setConnected(false);
-      setStatusMessage("Socket disconnected");
+      setStatusMessage("Socket disconnected — stop and restart mic if you were speaking.");
       addDebugEvent("socket.closed");
       clearAutoPilotTimer();
       autoPilotEnabledRef.current = false;
       setAutoPilotEnabled(false);
+      void stopMicTestRef.current();
     };
 
     ws.onerror = () => {
@@ -707,6 +709,10 @@ function App() {
     micTurnIdRef.current = null;
     setMicTestActive(false);
   };
+
+  useEffect(() => {
+    stopMicTestRef.current = stopMicTest;
+  });
 
   const startMicTest = async () => {
     if (!connected || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {

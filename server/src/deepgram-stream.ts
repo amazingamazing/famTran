@@ -10,6 +10,8 @@ export type DgPcmStreamOptions = {
   onTranscript?: (sourceText: string) => void;
   /** One phrase when Deepgram marks `is_final` (utterance slice). Used to translate/TTS before stop. */
   onFinalSegment?: (segmentText: string) => void;
+  /** If > 0, sets Deepgram `endpointing` (ms of silence before phrase end). 0 = API default. */
+  endpointingMs?: number;
 };
 
 /**
@@ -27,6 +29,7 @@ export class DgPcmStream {
   private readonly finals: string[] = [];
   private readonly onTranscript?: (sourceText: string) => void;
   private readonly onFinalSegment?: (segmentText: string) => void;
+  private readonly endpointingMs: number;
 
   constructor(
     private readonly apiKey: string,
@@ -35,6 +38,7 @@ export class DgPcmStream {
   ) {
     this.onTranscript = options.onTranscript;
     this.onFinalSegment = options.onFinalSegment;
+    this.endpointingMs = options.endpointingMs ?? 0;
   }
 
   addChunk(b: Buffer): void {
@@ -121,6 +125,9 @@ export class DgPcmStream {
       punctuate: "true",
       interim_results: "true"
     });
+    if (this.endpointingMs > 0) {
+      q.set("endpointing", String(this.endpointingMs));
+    }
     return `${LIVE_URL}?${q.toString()}`;
   }
 

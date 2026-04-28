@@ -72,6 +72,9 @@ Product choice for this app: **fast, partial source text for the speaker only**;
 |------|------|---------|-----------|
 | **Live STT** | While talking (`STT_STREAM` + `LIVE_CAPTIONS`) | Debounced **interim transcripts** (`transcript.live`) so they can read what the model thinks they said. | **No** `transcript.live`. Partial translations are confusing and often wrong; listeners should not see them. |
 | **Phrase-final (streaming)** | After each Deepgram `is_final` slice while mic is open (`STT_STREAM=1`) | Same live draft as above until that phrase locks. | **`transcript.chunk`** + **`audio.chunk`** for **that phrase only** (one translate + one TTS per phrase). |
+
+**Important:** a “phrase” here is **whatever Deepgram finalizes after a stretch of speech plus silence** (`endpointing`), **not** a guaranteed English sentence. A question like “What’s your favorite color?” often gets an `is_final` at a **short pause** before “If it’s blue…”, so you may see two clips for one rhetorical sentence. Raising **`DEEPGRAM_LIVE_ENDPOINTING_MS`** (e.g. 500–900) on the server waits for **longer silence** before closing a phrase, which reduces those splits at the cost of slightly later delivery. There is no free “true sentence” detector in this path—true sentence boundaries would need heavier client logic or a different STT contract.
+
 | **Turn end** | After `turn.stop` | May receive a **final short remainder** chunk if the closing transcript extends the last phrase. | **`debug.turn`** summarizes the full utterance; no duplicate TTS if phrases already covered the transcript. |
 
 Optional **`UTTERANCE_COMMIT_DELAY_MS`** on the server: short pause after the client ends the turn (before resolving STT → translate → TTS) so trailing streaming STT frames can settle; tune per language (e.g. ~1000–1500 ms for Japanese) without changing client code. Default 0 keeps dev/tests snappy.
@@ -147,7 +150,7 @@ Claude-in-Cursor will one-shot or near-one-shot most of this. The gotchas cluste
 
 **Real plumbing work** (Claude writes it, you debug over a day or two):
 - **Streaming WebSocket audio with backpressure.** Node `ws` doesn't apply TCP-level backpressure automatically when you write faster than the client drains. Watch `ws.bufferedAmount` before pushing next TTS frame; drop or coalesce if it grows.
-- **Reconnection with session resume.** When the iPhone backgrounds and returns, the WS is often dead. Implement resumable sessions keyed by a client-side token; server replays the last N transcript events on reconnect.
+- **Reconnection with session resume.** When the iPhone backgrounds and returns, the WS is often dead. Implement resumable sessions keyed by a client-side token; server replays the last N transcript events on reconnect. **Current behavior:** each reconnect gets a **new `clientId`**; the server **drops in-flight mic turns** when the **speaker’s** socket closes, so the speaker must **stop and start mic again** after reconnect. If only the listener reconnects, the speaker’s session continues.
 - **Piping Gemini tokens → Cartesia in real time.** This app **does not** stream translation into TTS mid-utterance: one committed sentence → one translate call → one Cartesia (or OpenAI) synthesis. If you later want minimum latency for other products, you could shovel Gemini stream into Cartesia's streaming input; that is intentionally out of scope here.
 
 **Genuinely tricky** (plan for a day of yak-shaving):

@@ -131,6 +131,100 @@ describe("RoomHub", () => {
     expect(corrections[0].rightText).toBe("Peh-peh");
   });
 
+  it("clears in-progress mic turn when the speaker disconnects", async () => {
+    const socket = new MockSocket();
+    const id = hub.join(socket as never, {
+      type: "session.join",
+      roomId: "ROOM42",
+      displayName: "Alex",
+      language: "en",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+
+    await hub.handleEvent(id, {
+      type: "turn.start",
+      turnId: "turn-dc",
+      roomId: "ROOM42",
+      speakerLanguage: "en"
+    });
+    hub.leave(id);
+    await hub.handleEvent(id, {
+      type: "turn.stop",
+      turnId: "turn-dc",
+      roomId: "ROOM42"
+    });
+
+    const debugTurns = socket.sent.map((item) => JSON.parse(item)).filter((event) => event.type === "debug.turn");
+    expect(debugTurns).toHaveLength(0);
+  });
+
+  it("ignores audio.input from a client that is not the turn speaker", async () => {
+    const speakerSocket = new MockSocket();
+    const otherSocket = new MockSocket();
+    const jaSocket = new MockSocket();
+    const speakerId = hub.join(speakerSocket as never, {
+      type: "session.join",
+      roomId: "ROOM42",
+      displayName: "Speaker",
+      language: "en",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+    const otherId = hub.join(otherSocket as never, {
+      type: "session.join",
+      roomId: "ROOM42",
+      displayName: "Other",
+      language: "en",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+    hub.join(jaSocket as never, {
+      type: "session.join",
+      roomId: "ROOM42",
+      displayName: "Yuki",
+      language: "ja",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+
+    await hub.handleEvent(speakerId, {
+      type: "turn.start",
+      turnId: "turn-own",
+      roomId: "ROOM42",
+      speakerLanguage: "en"
+    });
+    await hub.handleEvent(otherId, {
+      type: "audio.input",
+      turnId: "turn-own",
+      roomId: "ROOM42",
+      payloadBase64: Buffer.from("Evil").toString("base64"),
+      sequence: 0,
+      isLast: true
+    });
+    await hub.handleEvent(speakerId, {
+      type: "audio.input",
+      turnId: "turn-own",
+      roomId: "ROOM42",
+      payloadBase64: Buffer.from("Hello").toString("base64"),
+      sequence: 0,
+      isLast: true
+    });
+    await hub.handleEvent(speakerId, {
+      type: "turn.stop",
+      turnId: "turn-own",
+      roomId: "ROOM42"
+    });
+
+    const jaChunks = jaSocket.sent.map((item) => JSON.parse(item)).filter((e) => e.type === "transcript.chunk");
+    expect(jaChunks.length).toBeGreaterThanOrEqual(1);
+    expect(jaChunks[0].originalText).toBe("Hello");
+  });
+
   it("does not treat raw pcm mic bytes as utf8 text hints", async () => {
     const enSocket = new MockSocket();
     const jaSocket = new MockSocket();
