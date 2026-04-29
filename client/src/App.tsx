@@ -76,9 +76,12 @@ function ChatMessageRow({
   showOriginalLabel,
   hideOriginalLabel,
   timeLocale,
-  canEdit,
-  onSubmitEdit,
+  canEditSource,
+  canEditTranslation,
+  onSubmitSourceEdit,
+  onSubmitTranslationEdit,
   editMessageLabel,
+  editTranslationLabel,
   saveEditLabel,
   cancelEditLabel,
   editedLabel
@@ -87,15 +90,19 @@ function ChatMessageRow({
   showOriginalLabel: string;
   hideOriginalLabel: string;
   timeLocale: string;
-  canEdit: boolean;
-  onSubmitEdit: (turnId: string, sourceText: string) => void;
+  canEditSource: boolean;
+  canEditTranslation: boolean;
+  onSubmitSourceEdit: (turnId: string, sourceText: string) => void;
+  onSubmitTranslationEdit: (turnId: string, translatedText: string) => void;
   editMessageLabel: string;
+  editTranslationLabel: string;
   saveEditLabel: string;
   cancelEditLabel: string;
   editedLabel: string;
 }) {
   const [metaOpen, setMetaOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<"source" | "translation">("source");
   const [draft, setDraft] = useState(item.originalText);
   const hasOriginal =
     item.originalText.trim().length > 0 && item.originalText.trim() !== item.translatedText.trim();
@@ -121,13 +128,14 @@ function ChatMessageRow({
               </svg>
             </button>
           ) : null}
-          {canEdit ? (
+          {canEditSource ? (
             <button
               type="button"
               className="chatToggleOriginalIcon"
               onClick={() => {
                 setDraft(item.originalText);
-                setEditOpen((open) => !open);
+                setEditTarget("source");
+                setEditOpen(true);
               }}
               aria-expanded={editOpen}
               aria-label={editMessageLabel}
@@ -136,6 +144,25 @@ function ChatMessageRow({
               <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M12 20h9" />
                 <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+              </svg>
+            </button>
+          ) : null}
+          {canEditTranslation ? (
+            <button
+              type="button"
+              className="chatToggleOriginalIcon"
+              onClick={() => {
+                setDraft(item.translatedText);
+                setEditTarget("translation");
+                setEditOpen(true);
+              }}
+              aria-expanded={editOpen}
+              aria-label={editTranslationLabel}
+              title={editTranslationLabel}
+            >
+              <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M5 8h14M5 12h8M5 16h10" />
+                <path d="M17 3l4 4-7 7-4 1 1-4 6-8Z" />
               </svg>
             </button>
           ) : null}
@@ -153,7 +180,11 @@ function ChatMessageRow({
             <button
               type="button"
               onClick={() => {
-                onSubmitEdit(item.turnId, draft.trim());
+                if (editTarget === "source") {
+                  onSubmitSourceEdit(item.turnId, draft.trim());
+                } else {
+                  onSubmitTranslationEdit(item.turnId, draft.trim());
+                }
                 setEditOpen(false);
               }}
               disabled={!draft.trim()}
@@ -164,7 +195,7 @@ function ChatMessageRow({
               type="button"
               onClick={() => {
                 setEditOpen(false);
-                setDraft(item.originalText);
+                setDraft(editTarget === "source" ? item.originalText : item.translatedText);
               }}
             >
               {cancelEditLabel}
@@ -1135,6 +1166,19 @@ function App() {
     );
   };
 
+  const submitTranslatedEdit = (turnId: string, translatedText: string) => {
+    if (!connected || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !translatedText.trim()) {
+      return;
+    }
+    wsRef.current.send(
+      JSON.stringify({
+        type: "turn.edit_translation",
+        turnId,
+        translatedText: translatedText.trim()
+      })
+    );
+  };
+
   const saveGlossary = async () => {
     if (!manualTerm.trim() || !manualTranslation.trim()) {
       return;
@@ -1444,9 +1488,12 @@ function App() {
                 showOriginalLabel={S.showOriginal}
                 hideOriginalLabel={S.hideOriginal}
                 timeLocale={timeLocale}
-                canEdit={item.speakerId === clientId}
-                onSubmitEdit={submitEditedTurn}
+                canEditSource={item.speakerId === clientId}
+                canEditTranslation={!hearAudio}
+                onSubmitSourceEdit={submitEditedTurn}
+                onSubmitTranslationEdit={submitTranslatedEdit}
                 editMessageLabel={S.editMessage}
+                editTranslationLabel={S.editTranslation}
                 saveEditLabel={S.saveEdit}
                 cancelEditLabel={S.cancelEdit}
                 editedLabel={S.editedMessage}

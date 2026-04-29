@@ -155,6 +155,11 @@ export type ClientEvent =
       type: "turn.edit";
       turnId: string;
       sourceText: string;
+    }
+  | {
+      type: "turn.edit_translation";
+      turnId: string;
+      translatedText: string;
     };
 
 export const isSupportedLanguage = (value: string): value is SupportedLanguage =>

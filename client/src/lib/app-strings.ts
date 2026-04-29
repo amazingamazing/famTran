@@ -85,6 +85,7 @@ export type AppCopy = {
   hideOriginal: string;
   chatConversation: string;
   editMessage: string;
+  editTranslation: string;
   saveEdit: string;
   cancelEdit: string;
   editedMessage: string;
@@ -189,6 +190,7 @@ const EN: AppCopy = {
   hideOriginal: "Hide original",
   chatConversation: "Conversation",
   editMessage: "Edit message",
+  editTranslation: "Edit translation",
   saveEdit: "Save",
   cancelEdit: "Cancel",
   editedMessage: "Edited",
@@ -296,6 +298,7 @@ const JA: AppCopy = {
   hideOriginal: "原文を隠す",
   chatConversation: "会話",
   editMessage: "メッセージを編集",
+  editTranslation: "訳文を編集",
   saveEdit: "保存",
   cancelEdit: "キャンセル",
   editedMessage: "編集済み",

@@ -136,6 +136,42 @@ export class AppDb {
     };
   }
 
+  getTurnRow(
+    turnId: string,
+    targetLanguage: SupportedLanguage
+  ): {
+    turnId: string;
+    speakerId: string;
+    speakerName: string;
+    sourceLanguage: SupportedLanguage;
+    sourceText: string;
+    targetLanguage: SupportedLanguage;
+    targetText: string;
+  } | null {
+    const row = this.db
+      .prepare(
+        `SELECT turn_id AS turnId, speaker_id AS speakerId, speaker_name AS speakerName,
+                source_language AS sourceLanguage, source_text AS sourceText,
+                target_language AS targetLanguage, target_text AS targetText
+         FROM turns
+         WHERE turn_id = @turnId
+           AND target_language = @targetLanguage
+         LIMIT 1`
+      )
+      .get({ turnId, targetLanguage }) as
+      | {
+          turnId: string;
+          speakerId: string;
+          speakerName: string;
+          sourceLanguage: SupportedLanguage;
+          sourceText: string;
+          targetLanguage: SupportedLanguage;
+          targetText: string;
+        }
+      | undefined;
+    return row ?? null;
+  }
+
   updateTurnEditedTranslation(args: {
     turnId: string;
     targetLanguage: SupportedLanguage;

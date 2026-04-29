@@ -188,6 +188,9 @@ export class RoomHub {
       case "turn.edit":
         await this.handleTurnEdit(clientId, event.turnId, event.sourceText);
         return;
+      case "turn.edit_translation":
+        await this.handleTranslatedEdit(clientId, event.turnId, event.translatedText);
+        return;
       case "session.join":
         // Join is handled by ws bootstrap to create client ids.
         return;
@@ -251,6 +254,68 @@ export class RoomHub {
         targetLanguage: participant.language,
         originalText: sourceText,
         translatedText,
+        timestamp: Date.now(),
+        editedAt: editedAtSec * 1000
+      });
+    }
+  }
+
+  private async handleTranslatedEdit(editorClientId: string, turnId: string, translatedTextRaw: string) {
+    const translatedText = translatedTextRaw.trim();
+    if (!translatedText) {
+      return;
+    }
+    const editor = this.participants.get(editorClientId);
+    if (!editor || editor.hearAudio) {
+      // Translation edits are reserved for bilingual users (hearAudio=false from onboarding choice).
+      return;
+    }
+    const row = this.db.getTurnRow(turnId, editor.language);
+    if (!row) {
+      return;
+    }
+
+    const editedAtSec = Math.floor(Date.now() / 1000);
+    this.db.updateTurnEditedTranslation({
+      turnId,
+      targetLanguage: editor.language,
+      sourceText: row.sourceText,
+      targetText: translatedText,
+      editedAtSec
+    });
+    this.db.insertCorrection({
+      userId: editorClientId,
+      wrongText: row.targetText,
+      rightText: translatedText,
+      context: `manual translation edit turn=${turnId} lang=${editor.language}`
+    });
+
+    const seed = this.db.getTurnForEdit(turnId);
+    if (!seed) {
+      return;
+    }
+    for (const participant of this.participants.values()) {
+      const targetRow = this.db.getTurnRow(turnId, participant.language);
+      if (!targetRow) {
+        continue;
+      }
+      // Mark as edited for all viewers (even if only one language text changed).
+      this.db.updateTurnEditedTranslation({
+        turnId,
+        targetLanguage: participant.language,
+        sourceText: targetRow.sourceText,
+        targetText: targetRow.targetText,
+        editedAtSec
+      });
+      this.send(participant.socket, {
+        type: "transcript.edited",
+        turnId,
+        speakerId: seed.speakerId,
+        speakerDisplayName: seed.speakerName,
+        sourceLanguage: targetRow.sourceLanguage,
+        targetLanguage: participant.language,
+        originalText: targetRow.sourceText,
+        translatedText: participant.language === editor.language ? translatedText : targetRow.targetText,
         timestamp: Date.now(),
         editedAt: editedAtSec * 1000
       });
