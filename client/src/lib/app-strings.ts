@@ -179,10 +179,8 @@ const EN: AppCopy = {
   onboardingLangLineJa: "ご希望の言語は何ですか？",
   onboardingPickEnglish: "English",
   onboardingPickJapanese: "日本語",
-  onboardingUnderstandPromptFromEn:
-    "Do you understand Japanese well enough that you don’t need translated speech? If you choose Yes, spoken translations (TTS) will be off; transcripts still appear in your language.",
-  onboardingUnderstandPromptFromJa:
-    "英語を十分に理解しているため、音声による翻訳は不要ですか？「はい」の場合、翻訳の音声（TTS）はオフになります。文字のトランスクリプトは引き続き表示されます。",
+  onboardingUnderstandPromptFromEn: "Do you understand Japanese?",
+  onboardingUnderstandPromptFromJa: "英語はわかりますか？",
   onboardingUnderstandYes: "Yes",
   onboardingUnderstandNo: "No",
   onboardingNamePrompt: "What name should your family see for you? We’ll add it to the shared glossary so translators keep the spelling steady.",
