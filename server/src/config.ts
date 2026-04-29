@@ -43,6 +43,15 @@ export const appConfig = {
    * Live STT only: silence duration (ms) before Deepgram marks an `is_final` phrase. Higher → fewer phrase breaks but later delivery.
    * 0 = use Deepgram default. Try 500–900 if short pauses (e.g. after questions) split one grammatical sentence.
    */
-  deepgramLiveEndpointingMs: Math.max(0, Number(process.env.DEEPGRAM_LIVE_ENDPOINTING_MS ?? 0) || 0)
+  deepgramLiveEndpointingMs: Math.max(0, Number(process.env.DEEPGRAM_LIVE_ENDPOINTING_MS ?? 0) || 0),
+  /**
+   * When >0, force-commit a rolling stream segment every N ms so long monologues do not stall phrase delivery.
+   * Helps bound latency when Deepgram waits too long to emit `is_final`.
+   */
+  forcedStreamCommitMs: Math.max(0, Number(process.env.FORCED_STREAM_COMMIT_MS ?? 7000) || 0),
+  /**
+   * Minimum character count before a forced segment commit can fire.
+   */
+  forcedStreamCommitMinChars: Math.max(1, Number(process.env.FORCED_STREAM_COMMIT_MIN_CHARS ?? 24) || 24)
 };
 

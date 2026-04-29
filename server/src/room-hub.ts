@@ -31,6 +31,8 @@ type ActiveTurn = {
   committedStreamSource: string;
   /** Serializes phrase-final translate+TTS so order is preserved and completeTurn can await drain. */
   segmentPipeline: Promise<void>;
+  forcedCommitTimer: ReturnType<typeof setInterval> | null;
+  lastForcedCommitAtMs: number;
 };
 
 const decodeTextHintPayload = (payloadBase64: string, sequence: number, isLast: boolean): string => {
@@ -73,6 +75,37 @@ const decodeAudioBytes = (payloadBase64: string): Buffer | null => {
 
 const sleepMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+const normalize = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[.,!?;:()[\]{}"']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const dedupeLeadingOverlap = (alreadyCommitted: string, incoming: string): string => {
+  const committedWords = normalize(alreadyCommitted).split(" ").filter(Boolean);
+  const incomingWordsRaw = incoming.trim().split(/\s+/).filter(Boolean);
+  const incomingWordsNorm = normalize(incoming).split(" ").filter(Boolean);
+  if (committedWords.length === 0 || incomingWordsNorm.length === 0) {
+    return incoming.trim();
+  }
+  const maxOverlap = Math.min(12, committedWords.length, incomingWordsNorm.length);
+  let overlap = 0;
+  for (let n = maxOverlap; n >= 1; n -= 1) {
+    const c = committedWords.slice(-n).join(" ");
+    const i = incomingWordsNorm.slice(0, n).join(" ");
+    if (c === i) {
+      overlap = n;
+      break;
+    }
+  }
+  if (overlap === 0) {
+    return incoming.trim();
+  }
+  const sliced = incomingWordsRaw.slice(overlap).join(" ").trim();
+  return sliced;
+};
+
 export class RoomHub {
   /** Everyone in the single family session. */
   private readonly participants = new Map<string, SessionParticipant>();
@@ -103,6 +136,7 @@ export class RoomHub {
     for (const [turnId, turn] of [...this.activeTurns.entries()]) {
       if (turn.speakerId === clientId) {
         this.clearLiveCaptionSchedule(turn);
+        this.clearForcedCommitSchedule(turn);
         if (turn.dgStream) {
           void turn.dgStream.close().catch(() => undefined);
         }
@@ -126,8 +160,14 @@ export class RoomHub {
           liveSeq: 0,
           liveDebounce: null,
           committedStreamSource: "",
-          segmentPipeline: Promise.resolve()
+          segmentPipeline: Promise.resolve(),
+          forcedCommitTimer: null,
+          lastForcedCommitAtMs: Date.now()
         });
+        const started = this.activeTurns.get(event.turnId);
+        if (started) {
+          this.scheduleForcedCommit(event.turnId, started);
+        }
         return;
       case "audio.input": {
         const turn = this.activeTurns.get(event.turnId);
@@ -336,6 +376,7 @@ export class RoomHub {
     }
     const sourceSpeaker = this.participants.get(turn.speakerId);
     if (!sourceSpeaker) {
+      this.clearForcedCommitSchedule(turn);
       this.activeTurns.delete(turnId);
       return;
     }
@@ -349,6 +390,7 @@ export class RoomHub {
     const transcription = turnTranscription.result;
     const fullSourceText = transcription.value.trim();
     if (fullSourceText.length === 0) {
+      this.clearForcedCommitSchedule(turn);
       this.activeTurns.delete(turnId);
       return;
     }
@@ -378,6 +420,11 @@ export class RoomHub {
           return;
         }
         effectiveSource = remainder;
+      } else {
+        const remainder = dedupeLeadingOverlap(committed, fullSourceText);
+        if (remainder.length > 0 && remainder !== fullSourceText) {
+          effectiveSource = remainder;
+        }
       }
     }
 
@@ -520,6 +567,7 @@ export class RoomHub {
       },
       participants: participantDebugRows
     });
+    this.clearForcedCommitSchedule(turn);
     this.activeTurns.delete(turnId);
   }
 
@@ -536,6 +584,40 @@ export class RoomHub {
       clearTimeout(turn.liveDebounce);
       turn.liveDebounce = null;
     }
+  }
+
+  private clearForcedCommitSchedule(turn: ActiveTurn) {
+    if (turn.forcedCommitTimer) {
+      clearInterval(turn.forcedCommitTimer);
+      turn.forcedCommitTimer = null;
+    }
+  }
+
+  private scheduleForcedCommit(turnId: string, turn: ActiveTurn) {
+    if (!this.shouldSttStream() || appConfig.forcedStreamCommitMs <= 0) {
+      return;
+    }
+    this.clearForcedCommitSchedule(turn);
+    turn.forcedCommitTimer = setInterval(() => {
+      const current = this.activeTurns.get(turnId);
+      if (!current) {
+        return;
+      }
+      const now = Date.now();
+      if (now - current.lastForcedCommitAtMs < appConfig.forcedStreamCommitMs) {
+        return;
+      }
+      const rolling = current.latestLiveSource.trim();
+      if (!rolling) {
+        return;
+      }
+      const delta = dedupeLeadingOverlap(current.committedStreamSource, rolling);
+      if (delta.length < appConfig.forcedStreamCommitMinChars) {
+        return;
+      }
+      current.lastForcedCommitAtMs = now;
+      this.queueStreamSegmentCommit({ turnId, segmentText: delta });
+    }, 1000);
   }
 
   private scheduleLiveCaption(args: { turnId: string; sourceText: string }) {
@@ -621,7 +703,10 @@ export class RoomHub {
       return;
     }
 
-    const sourceText = args.segmentText;
+    const sourceText = dedupeLeadingOverlap(turn.committedStreamSource, args.segmentText);
+    if (!sourceText.trim()) {
+      return;
+    }
     const glossaryLines = this.db
       .listGlossary()
       .map((entry) => `${entry.term} -> ${entry.translation} (${entry.notes})`);
@@ -736,6 +821,7 @@ export class RoomHub {
       const acc = tail.committedStreamSource.trim();
       const piece = sourceText.trim();
       tail.committedStreamSource = acc ? `${acc} ${piece}` : piece;
+      tail.lastForcedCommitAtMs = Date.now();
     }
   }
 
@@ -783,6 +869,7 @@ export class RoomHub {
       },
       participants: participantDebugRows
     });
+    this.clearForcedCommitSchedule(args.turn);
     this.activeTurns.delete(args.turnId);
   }
 
