@@ -175,8 +175,8 @@ const EN: AppCopy = {
   showOriginal: "Show original",
   hideOriginal: "Hide original",
   chatConversation: "Conversation",
-  onboardingLangLineEn: "Which language would you like for buttons, labels, and prompts?",
-  onboardingLangLineJa: "ボタンや説明文に使う言語を選んでください。",
+  onboardingLangLineEn: "What is your preferred language?",
+  onboardingLangLineJa: "ご希望の言語は何ですか？",
   onboardingPickEnglish: "English",
   onboardingPickJapanese: "日本語",
   onboardingUnderstandPromptFromEn:

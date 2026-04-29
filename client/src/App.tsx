@@ -1139,7 +1139,6 @@ function App() {
     return (
       <main className="layout onboardingLayout">
         <div className="panel onboardingCard">
-          <h1 className="pageTitle">{pick.pageTitle}</h1>
           {onboardingStep === 0 ? (
             <>
               <p className="onboardingLead">{lineEn}</p>
