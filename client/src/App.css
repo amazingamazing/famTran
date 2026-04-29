@@ -332,3 +332,73 @@ button.transcriptToggleOpen::after {
     grid-template-columns: 1fr;
   }
 }
+
+.onboardingLayout {
+  min-height: 70vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.onboardingCard {
+  max-width: 28rem;
+  width: 100%;
+}
+
+.onboardingLead {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  line-height: 1.45;
+}
+
+.onboardingLeadJa {
+  margin: 0 0 1.25rem;
+  font-size: 1.05rem;
+  line-height: 1.45;
+  color: #c8d4e8;
+}
+
+.onboardingPrompt {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.onboardingActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-bottom: 1rem;
+}
+
+button.onboardingPrimary {
+  flex: 1 1 auto;
+  min-width: 7rem;
+  padding: 0.65rem 1rem;
+  font-weight: 600;
+  border-color: #3d6998;
+  background: #1a2f44;
+}
+
+.onboardingBackButton {
+  background: transparent;
+  border-color: #3a4759;
+  color: #9fb0c7;
+  font-size: 0.88rem;
+}
+
+.onboardingNameField {
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+.onboardingNameField input {
+  width: 100%;
+  margin-top: 0.35rem;
+}
+
+.onboardingError {
+  color: #f0a8a8;
+  font-size: 0.9rem;
+  margin: 0 0 0.75rem;
+}

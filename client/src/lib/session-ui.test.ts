@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  GLOSSARY_USER_ID_COOKIE,
+  getOrCreateGlossaryUserId,
   readControlsExpandedPreference,
   shouldAutoConnectFromSavedSession,
   writeControlsExpandedPreference
@@ -57,5 +59,17 @@ describe("session-ui helpers", () => {
     writeControlsExpandedPreference(storage, true);
 
     expect(setItem).toHaveBeenCalledWith("family_translation_controls_expanded", "true");
+  });
+
+  it("returns stable glossary user id from cookie storage", () => {
+    const store = new Map<string, string>();
+    const getCookie = (name: string) => store.get(name) ?? "";
+    const setCookie = (name: string, value: string) => {
+      store.set(name, value);
+    };
+    const first = getOrCreateGlossaryUserId(getCookie, setCookie);
+    expect(first.length).toBeGreaterThan(10);
+    expect(store.get(GLOSSARY_USER_ID_COOKIE)).toBe(first);
+    expect(getOrCreateGlossaryUserId(getCookie, setCookie)).toBe(first);
   });
 });

@@ -2,9 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProviderType, ServerEvent, SupportedLanguage } from "@family-translation/shared";
 
 import "./App.css";
+import { appStrings } from "./lib/app-strings";
 import { audioPayloadToObjectUrl } from "./lib/audio-playback";
 import { parseEvent } from "./lib/parse-event";
 import {
+  getOrCreateGlossaryUserId,
+  ONBOARDING_DONE_COOKIE,
   readControlsExpandedPreference,
   shouldAutoConnectFromSavedSession,
   writeControlsExpandedPreference
@@ -39,9 +42,9 @@ type LiveCaptionRow = {
 
 type DebugTurnRow = Extract<ServerEvent, { type: "debug.turn" }>;
 
-function AudioUnlockButton({ onClick }: { onClick: () => void }) {
+function AudioUnlockButton({ onClick, label }: { onClick: () => void; label: string }) {
   return (
-    <button type="button" className="transcriptAudioUnlock" onClick={onClick} aria-label="Enable audio playback">
+    <button type="button" className="transcriptAudioUnlock" onClick={onClick} aria-label={label}>
       <svg
         className="transcriptAudioUnlockIcon"
         viewBox="0 0 24 24"
@@ -62,7 +65,7 @@ function AudioUnlockButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-function TranscriptItem({ item }: { item: TranscriptRow }) {
+function TranscriptItem({ item, sourceTextAria }: { item: TranscriptRow; sourceTextAria: string }) {
   const [metaOpen, setMetaOpen] = useState(false);
   return (
     <li>
@@ -73,7 +76,7 @@ function TranscriptItem({ item }: { item: TranscriptRow }) {
           className={metaOpen ? "transcriptToggle transcriptToggleOpen" : "transcriptToggle"}
           onClick={() => setMetaOpen((open) => !open)}
           aria-expanded={metaOpen}
-          aria-label="Source text and time"
+          aria-label={sourceTextAria}
         />
       </div>
       {metaOpen ? (
@@ -166,9 +169,6 @@ const getCookieBoolean = (name: string, fallback: boolean) => {
   return fallback;
 };
 
-const cookieLanguage = getCookie("family_translation_language");
-const initialLanguage: SupportedLanguage = cookieLanguage === "ja" ? "ja" : "en";
-
 const cookieProviderStt = getCookie("family_translation_provider_stt");
 const initialProviderStt: ProviderType = cookieProviderStt === "openai" ? "openai" : "deepgram";
 
@@ -240,10 +240,25 @@ function App() {
   const autoConnectAttemptedRef = useRef(false);
   const connectRef = useRef<() => void>(() => undefined);
   const stopMicTestRef = useRef<() => Promise<void>>(async () => {});
-  const [displayName, setDisplayName] = useState(() => getCookie("family_translation_display_name"));
-  const [language, setLanguage] = useState<SupportedLanguage>(initialLanguage);
+  const onboardingDoneInit = getCookie(ONBOARDING_DONE_COOKIE) === "true";
+  const [onboardingDone, setOnboardingDone] = useState(onboardingDoneInit);
+  const [onboardingStep, setOnboardingStep] = useState<0 | 1 | 2>(0);
+  const [onboardingNameDraft, setOnboardingNameDraft] = useState("");
+  const [onboardingError, setOnboardingError] = useState("");
+
+  const [displayName, setDisplayName] = useState(() =>
+    onboardingDoneInit ? getCookie("family_translation_display_name") : ""
+  );
+  const [language, setLanguage] = useState<SupportedLanguage>(() => {
+    if (!onboardingDoneInit) {
+      return "en";
+    }
+    return getCookie("family_translation_language") === "ja" ? "ja" : "en";
+  });
   const [contextNotes, setContextNotes] = useState(() => getCookie("family_translation_context_notes"));
-  const [hearAudio, setHearAudio] = useState(() => getCookieBoolean("family_translation_hear_audio", true));
+  const [hearAudio, setHearAudio] = useState(() =>
+    onboardingDoneInit ? getCookieBoolean("family_translation_hear_audio", true) : true
+  );
   const [connected, setConnected] = useState(false);
   const [clientId, setClientId] = useState("");
   const clientIdRef = useRef("");
@@ -260,7 +275,13 @@ function App() {
   const [manualTranslation, setManualTranslation] = useState("");
   const [manualNotes, setManualNotes] = useState("");
   const [networkOnline, setNetworkOnline] = useState(navigator.onLine);
-  const [statusMessage, setStatusMessage] = useState("Not connected");
+  const [statusMessage, setStatusMessage] = useState(() =>
+    appStrings(
+      getCookie(ONBOARDING_DONE_COOKIE) === "true" && getCookie("family_translation_language") === "ja"
+        ? "ja"
+        : "en"
+    ).statusNotConnected
+  );
   const [autoPilotEnabled, setAutoPilotEnabled] = useState(false);
   const [autoPilotRuns, setAutoPilotRuns] = useState(0);
   const [nextAutoDelaySeconds, setNextAutoDelaySeconds] = useState<number | null>(null);
@@ -268,7 +289,7 @@ function App() {
   const [controlsExpanded, setControlsExpanded] = useState(() =>
     readControlsExpandedPreference(
       window.localStorage,
-      !getCookie("family_translation_display_name").trim()
+      !onboardingDoneInit || !getCookie("family_translation_display_name").trim()
     )
   );
   const [playbackUnlocked, setPlaybackUnlocked] = useState(false);
@@ -447,6 +468,49 @@ function App() {
     writeControlsExpandedPreference(window.localStorage, controlsExpanded);
   }, [controlsExpanded]);
 
+  const S = useMemo(() => appStrings(language), [language]);
+
+  const completeOnboardingWithName = async () => {
+    const name = onboardingNameDraft.trim();
+    const copy = appStrings(language);
+    if (!name) {
+      setOnboardingError(copy.onboardingNameRequired);
+      return;
+    }
+    setOnboardingError("");
+    const glossaryUserId = getOrCreateGlossaryUserId(getCookie, setCookie);
+    const notes =
+      language === "ja"
+        ? "家族の表示名。翻訳で置き換え・言い換えしない。Family display name; preserve exactly in EN/JA."
+        : "Family display name; preserve exactly in EN/JA. 家族の表示名—翻訳で置き換え・言い換えしない。";
+    let glossaryOk = false;
+    try {
+      const response = await fetch(`${HTTP_BASE_URL}/api/glossary`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: glossaryUserId,
+          term: name,
+          translation: name,
+          notes
+        })
+      });
+      glossaryOk = response.ok;
+    } catch {
+      glossaryOk = false;
+    }
+    setCookie(ONBOARDING_DONE_COOKIE, "true");
+    setDisplayName(name);
+    setOnboardingDone(true);
+    setOnboardingStep(0);
+    setOnboardingNameDraft("");
+    if (!glossaryOk) {
+      setStatusMessage(copy.onboardingGlossaryWarning);
+    } else {
+      setStatusMessage(copy.statusNotConnected);
+    }
+  };
+
   const sendTurn = (messageText: string, source: "manual" | "autopilot") => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !messageText.trim() || !connected) {
       return false;
@@ -495,7 +559,7 @@ function App() {
 
   const connect = () => {
     if (!displayName.trim()) {
-      setStatusMessage("Set your display name first.");
+      setStatusMessage(S.statusSetNameFirst);
       return;
     }
     wsRef.current?.close();
@@ -504,7 +568,7 @@ function App() {
     addDebugEvent(`socket.connecting lang=${language}`);
 
     ws.onopen = () => {
-      setStatusMessage("Socket connected");
+      setStatusMessage(S.statusSocketConnected);
       addDebugEvent("socket.open");
       ws.send(
         JSON.stringify({
@@ -528,7 +592,7 @@ function App() {
         setConnected(true);
         clientIdRef.current = event.clientId;
         setClientId(event.clientId);
-        setStatusMessage("Connected");
+        setStatusMessage(S.statusConnected);
         addDebugEvent(`session.joined client=${event.clientId}`);
         if (autoPilotEnabled) {
           clearAutoPilotTimer();
@@ -624,7 +688,7 @@ function App() {
 
     ws.onclose = () => {
       setConnected(false);
-      setStatusMessage("Socket disconnected — stop and restart mic if you were speaking.");
+      setStatusMessage(S.statusSocketDisconnected);
       addDebugEvent("socket.closed");
       clearAutoPilotTimer();
       autoPilotEnabledRef.current = false;
@@ -639,7 +703,7 @@ function App() {
 
   useEffect(() => {
     connectRef.current = connect;
-  }, [connect]);
+  });
 
   useEffect(() => {
     const shouldAutoConnect = shouldAutoConnectFromSavedSession({
@@ -702,7 +766,7 @@ function App() {
 
   const startMicTest = async () => {
     if (!connected || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      setStatusMessage("Connect first before starting mic test.");
+      setStatusMessage(S.statusConnectBeforeMic);
       return;
     }
     if (micTestActive) {
@@ -766,7 +830,7 @@ function App() {
       setMicTestActive(true);
       addDebugEvent(`mic.start turn=${turnId} sampleRate=${audioContext.sampleRate}`);
     } catch {
-      setStatusMessage("Mic access failed. Check browser microphone permissions.");
+      setStatusMessage(S.statusMicFailed);
       addDebugEvent("mic.start.failed");
       await stopMicTest();
     }
@@ -780,14 +844,15 @@ function App() {
   };
 
   const saveGlossary = async () => {
-    if (!clientId || !manualTerm.trim() || !manualTranslation.trim()) {
+    if (!manualTerm.trim() || !manualTranslation.trim()) {
       return;
     }
+    const glossaryUserId = getOrCreateGlossaryUserId(getCookie, setCookie);
     const response = await fetch(`${HTTP_BASE_URL}/api/glossary`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        userId: clientId,
+        userId: glossaryUserId,
         term: manualTerm.trim(),
         translation: manualTranslation.trim(),
         notes: manualNotes.trim()
@@ -797,7 +862,7 @@ function App() {
       setManualTerm("");
       setManualTranslation("");
       setManualNotes("");
-      setStatusMessage("Glossary saved");
+      setStatusMessage(S.statusGlossarySaved);
       addDebugEvent(`glossary.saved term=${manualTerm.trim()}`);
     }
   };
@@ -817,7 +882,7 @@ function App() {
     setCorrectionWrong("");
     setCorrectionRight("");
     setCorrectionContext("");
-    setStatusMessage("Correction submitted");
+    setStatusMessage(S.statusCorrectionSubmitted);
     addDebugEvent(`correction.submitted wrong=${correctionWrong.trim()}`);
   };
 
@@ -835,7 +900,7 @@ function App() {
 
   const toggleAutoPilot = () => {
     if (!connected) {
-      setStatusMessage("Connect first before starting autopilot.");
+      setStatusMessage(S.statusConnectForAutopilot);
       return;
     }
     if (autoPilotEnabled) {
@@ -899,10 +964,10 @@ function App() {
 
     try {
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-      setStatusMessage("Debug blob copied to clipboard.");
+      setStatusMessage(S.statusDebugCopied);
       addDebugEvent("debug.copied");
     } catch {
-      setStatusMessage("Could not copy debug blob. Retry in Safari app context.");
+      setStatusMessage(S.statusDebugCopyFailed);
       addDebugEvent("debug.copy.failed");
     }
   };
@@ -912,24 +977,131 @@ function App() {
     [transcripts]
   );
 
+  if (!onboardingDone) {
+    const lineEn = appStrings("en").onboardingLangLineEn;
+    const lineJa = appStrings("ja").onboardingLangLineJa;
+    const pick = appStrings(language);
+    return (
+      <main className="layout onboardingLayout">
+        <div className="panel onboardingCard">
+          <h1 className="pageTitle">{pick.pageTitle}</h1>
+          {onboardingStep === 0 ? (
+            <>
+              <p className="onboardingLead">{lineEn}</p>
+              <p className="onboardingLeadJa">{lineJa}</p>
+              <div className="onboardingActions">
+                <button
+                  type="button"
+                  className="onboardingPrimary"
+                  onClick={() => {
+                    setLanguage("en");
+                    setOnboardingStep(1);
+                  }}
+                >
+                  {appStrings("en").onboardingPickEnglish}
+                </button>
+                <button
+                  type="button"
+                  className="onboardingPrimary"
+                  onClick={() => {
+                    setLanguage("ja");
+                    setOnboardingStep(1);
+                  }}
+                >
+                  {appStrings("ja").onboardingPickJapanese}
+                </button>
+              </div>
+            </>
+          ) : null}
+          {onboardingStep === 1 ? (
+            <>
+              <p className="onboardingPrompt">
+                {language === "en" ? pick.onboardingUnderstandPromptFromEn : pick.onboardingUnderstandPromptFromJa}
+              </p>
+              <div className="onboardingActions">
+                <button
+                  type="button"
+                  className="onboardingPrimary"
+                  onClick={() => {
+                    setHearAudio(false);
+                    setOnboardingStep(2);
+                  }}
+                >
+                  {pick.onboardingUnderstandYes}
+                </button>
+                <button
+                  type="button"
+                  className="onboardingPrimary"
+                  onClick={() => {
+                    setHearAudio(true);
+                    setOnboardingStep(2);
+                  }}
+                >
+                  {pick.onboardingUnderstandNo}
+                </button>
+              </div>
+              <button type="button" className="onboardingBackButton" onClick={() => setOnboardingStep(0)}>
+                {pick.onboardingBack}
+              </button>
+            </>
+          ) : null}
+          {onboardingStep === 2 ? (
+            <>
+              <p className="onboardingPrompt">{pick.onboardingNamePrompt}</p>
+              <label className="onboardingNameField">
+                <input
+                  value={onboardingNameDraft}
+                  onChange={(event) => {
+                    setOnboardingNameDraft(event.target.value);
+                    if (onboardingError) {
+                      setOnboardingError("");
+                    }
+                  }}
+                  placeholder={pick.onboardingNamePlaceholder}
+                  autoComplete="name"
+                />
+              </label>
+              {onboardingError ? <p className="onboardingError">{onboardingError}</p> : null}
+              <div className="onboardingActions">
+                <button type="button" className="onboardingPrimary" onClick={() => void completeOnboardingWithName()}>
+                  {pick.onboardingContinue}
+                </button>
+              </div>
+              <button
+                type="button"
+                className="onboardingBackButton"
+                onClick={() => {
+                  setOnboardingError("");
+                  setOnboardingStep(1);
+                }}
+              >
+                {pick.onboardingBack}
+              </button>
+            </>
+          ) : null}
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="layout">
       <header className="panel">
-        <h1 className="pageTitle">Family Translation</h1>
+        <h1 className="pageTitle">{S.pageTitle}</h1>
         <div className="headerRow headerToolbar">
           <div className="actions">
             <button type="button" onClick={() => setControlsExpanded((previous) => !previous)}>
-              {controlsExpanded ? "Compact view" : "Show controls"}
+              {controlsExpanded ? S.compactView : S.showControls}
             </button>
             <button type="button" onClick={copyDebugBlob}>
-              Copy debug blob
+              {S.copyDebugBlob}
             </button>
             {!playbackUnlocked ? (
-              <AudioUnlockButton onClick={() => void unlockPlaybackAudio()} />
+              <AudioUnlockButton onClick={() => void unlockPlaybackAudio()} label={S.enableAudioPlayback} />
             ) : null}
           </div>
           <p className={`headerNet ${networkOnline ? "ok" : "warn"}`}>
-            {networkOnline ? "Online" : "Offline"}
+            {networkOnline ? S.online : S.offline}
           </p>
         </div>
       </header>
@@ -937,138 +1109,146 @@ function App() {
       {controlsExpanded ? (
         <section className="panel grid2">
           <label>
-            Display name
-            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Alex" />
+            {S.displayNameLabel}
+            <input
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              placeholder={S.displayNamePlaceholder}
+            />
           </label>
           <label>
-            Language
+            {S.languageLabel}
             <select value={language} onChange={(event) => setLanguage(event.target.value as SupportedLanguage)}>
-              <option value="en">English</option>
-              <option value="ja">Japanese</option>
+              <option value="en">{S.langEnglish}</option>
+              <option value="ja">{S.langJapanese}</option>
             </select>
           </label>
           <label>
-            Hear translated audio (TTS)
+            {S.hearTtsLabel}
             <input type="checkbox" checked={hearAudio} onChange={(event) => setHearAudio(event.target.checked)} />
           </label>
           <label className="full">
-            Context notes (people, terms, pronunciation hints)
+            {S.contextNotesLabel}
             <textarea value={contextNotes} onChange={(event) => setContextNotes(event.target.value)} rows={2} />
           </label>
           <div className="actions">
             <button onClick={connect} disabled={connected}>
-              Connect
+              {S.connect}
             </button>
-            <button onClick={disconnect}>Disconnect</button>
+            <button onClick={disconnect}>{S.disconnect}</button>
           </div>
           <p className="full">{statusMessage}</p>
         </section>
       ) : (
         <section className="panel compactSessionPanel">
-          <h2 className="roomInfoHeading">Session</h2>
+          <h2 className="roomInfoHeading">{S.sessionHeading}</h2>
           <div className="compactInfoGrid">
             <div className="compactInfoCell">
-              <span className="compactInfoLabel">Name</span>
+              <span className="compactInfoLabel">{S.compactName}</span>
               <span className="compactInfoValue">{displayName.trim() || "—"}</span>
             </div>
             <div className="compactInfoCell">
-              <span className="compactInfoLabel">Language</span>
+              <span className="compactInfoLabel">{S.compactLanguage}</span>
               <span className="compactInfoValue">{language.toUpperCase()}</span>
             </div>
             <div className="compactInfoCell">
-              <span className="compactInfoLabel">TTS</span>
-              <span className="compactInfoValue">{hearAudio ? "On" : "Off"}</span>
+              <span className="compactInfoLabel">{S.compactTts}</span>
+              <span className="compactInfoValue">{hearAudio ? S.ttsOn : S.ttsOff}</span>
             </div>
           </div>
           <div className="actions">
             <button onClick={connect} disabled={connected}>
-              Connect
+              {S.connect}
             </button>
-            <button onClick={disconnect}>Disconnect</button>
+            <button onClick={disconnect}>{S.disconnect}</button>
           </div>
           <p>{statusMessage}</p>
         </section>
       )}
 
       <section className="panel">
-        <h2>Live speech-to-text</h2>
+        <h2>{S.liveSpeechHeading}</h2>
         <div className="actions">
           <input
             value={textInput}
             onChange={(event) => setTextInput(event.target.value)}
-            placeholder="Say something..."
+            placeholder={S.saySomethingPlaceholder}
             className="grow"
           />
           <button onClick={submitTurn} disabled={!connected || !textInput.trim()}>
-            Send utterance
+            {S.sendUtterance}
           </button>
           <button onClick={toggleAutoPilot} disabled={!connected}>
-            {autoPilotEnabled ? "Stop simulator" : "Start simulator"}
+            {autoPilotEnabled ? S.stopSimulator : S.startSimulator}
           </button>
           {!micTestActive ? (
             <button onClick={() => void startMicTest()} disabled={!connected}>
-              Start mic test
+              {S.startMicTest}
             </button>
           ) : (
-            <button onClick={() => void stopMicTest()}>Stop mic test</button>
+            <button onClick={() => void stopMicTest()}>{S.stopMicTest}</button>
           )}
         </div>
-        <p className="liveMetaLine">Messages sent: {autoPilotRuns}</p>
-        <p className="liveMetaLine">Mic test state: {micTestActive ? "capturing audio" : "idle"}</p>
+        <p className="liveMetaLine">
+          {S.messagesSent}: {autoPilotRuns}
+        </p>
+        <p className="liveMetaLine">
+          {S.micTestStateLabel}: {micTestActive ? S.micTestCapturing : S.micTestIdle}
+        </p>
       </section>
 
       {controlsExpanded ? (
         <>
           <section className="panel grid2">
             <div>
-              <h2>Glossary Entry</h2>
+              <h2>{S.glossaryHeading}</h2>
               <label>
-                Term
+                {S.termLabel}
                 <input value={manualTerm} onChange={(event) => setManualTerm(event.target.value)} />
               </label>
               <label>
-                Translation
+                {S.translationLabel}
                 <input value={manualTranslation} onChange={(event) => setManualTranslation(event.target.value)} />
               </label>
               <label>
-                Notes
+                {S.notesLabel}
                 <input value={manualNotes} onChange={(event) => setManualNotes(event.target.value)} />
               </label>
-              <button onClick={saveGlossary} disabled={!connected}>
-                Save glossary
+              <button onClick={saveGlossary} disabled={!manualTerm.trim() || !manualTranslation.trim()}>
+                {S.saveGlossary}
               </button>
             </div>
             <div>
-              <h2>Correction Feedback</h2>
+              <h2>{S.correctionHeading}</h2>
               <label>
-                Wrong output
+                {S.wrongOutputLabel}
                 <input value={correctionWrong} onChange={(event) => setCorrectionWrong(event.target.value)} />
               </label>
               <label>
-                Correct output
+                {S.correctOutputLabel}
                 <input value={correctionRight} onChange={(event) => setCorrectionRight(event.target.value)} />
               </label>
               <label>
-                Context
+                {S.contextLabel}
                 <input value={correctionContext} onChange={(event) => setCorrectionContext(event.target.value)} />
               </label>
               <button onClick={submitCorrection} disabled={!connected}>
-                Submit correction
+                {S.submitCorrection}
               </button>
             </div>
           </section>
 
           <section className="panel grid3">
-            <h2 className="full">Provider Controls (Operator)</h2>
+            <h2 className="full">{S.providerHeading}</h2>
             <label>
-              STT
+              {S.sttLabel}
               <select value={providerStt} onChange={(event) => setProviderStt(event.target.value as ProviderType)}>
                 <option value="deepgram">Deepgram</option>
                 <option value="openai">OpenAI</option>
               </select>
             </label>
             <label>
-              Translation
+              {S.translationProviderLabel}
               <select
                 value={providerTranslation}
                 onChange={(event) => setProviderTranslation(event.target.value as ProviderType)}
@@ -1078,7 +1258,7 @@ function App() {
               </select>
             </label>
             <label>
-              TTS
+              {S.ttsProviderLabel}
               <select value={providerTts} onChange={(event) => setProviderTts(event.target.value as ProviderType)}>
                 <option value="cartesia">Cartesia</option>
                 <option value="openai">OpenAI</option>
@@ -1086,7 +1266,7 @@ function App() {
             </label>
             <div className="actions full">
               <button onClick={saveProviders} disabled={!connected}>
-                Apply providers
+                {S.applyProviders}
               </button>
             </div>
           </section>
@@ -1095,12 +1275,12 @@ function App() {
 
       <section className="panel">
         <div className="transcriptPanelHead">
-          <h2>Transcript</h2>
-          {!playbackUnlocked ? <AudioUnlockButton onClick={() => void unlockPlaybackAudio()} /> : null}
+          <h2>{S.transcriptHeading}</h2>
+          {!playbackUnlocked ? <AudioUnlockButton onClick={() => void unlockPlaybackAudio()} label={S.enableAudioPlayback} /> : null}
         </div>
         {liveCaption ? (
           <div className="transcriptLive" aria-live="polite">
-            <p className="transcriptLiveBadge">Your speech (live draft)</p>
+            <p className="transcriptLiveBadge">{S.yourSpeechLive}</p>
             <p className="transcriptLiveMain">{liveCaption.translatedText}</p>
             {liveCaption.translatedText.trim() === liveCaption.originalText.trim() ? null : (
               <p className="transcriptLiveSub">{liveCaption.originalText}</p>
@@ -1109,18 +1289,18 @@ function App() {
         ) : null}
         <ul className="transcriptList">
           {sortedTranscripts.map((item) => (
-            <TranscriptItem key={`${item.turnId}-${item.timestamp}`} item={item} />
+            <TranscriptItem key={`${item.turnId}-${item.timestamp}`} item={item} sourceTextAria={S.sourceTextAria} />
           ))}
         </ul>
       </section>
 
       {controlsExpanded ? (
         <section className="panel">
-          <h2>iPhone Reliability Checklist</h2>
+          <h2>{S.iphoneChecklistHeading}</h2>
           <ul>
-            <li>Install via Add to Home Screen, keep app in foreground while conversing.</li>
-            <li>Disable auto-lock during conversation sessions.</li>
-            <li>If audio stalls, tap Disconnect then Connect to resume session.</li>
+            <li>{S.iphoneChecklist1}</li>
+            <li>{S.iphoneChecklist2}</li>
+            <li>{S.iphoneChecklist3}</li>
           </ul>
         </section>
       ) : null}

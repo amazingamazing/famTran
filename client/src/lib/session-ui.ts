@@ -1,5 +1,21 @@
 export const CONTROLS_EXPANDED_STORAGE_KEY = "family_translation_controls_expanded";
 
+export const ONBOARDING_DONE_COOKIE = "family_translation_onboarding_done";
+export const GLOSSARY_USER_ID_COOKIE = "family_translation_glossary_user_id";
+
+export const getOrCreateGlossaryUserId = (
+  getCookie: (name: string) => string,
+  setCookie: (name: string, value: string) => void
+): string => {
+  const existing = getCookie(GLOSSARY_USER_ID_COOKIE).trim();
+  if (existing) {
+    return existing;
+  }
+  const created = crypto.randomUUID();
+  setCookie(GLOSSARY_USER_ID_COOKIE, created);
+  return created;
+};
+
 type AutoConnectArgs = {
   displayName: string;
   connected: boolean;
