@@ -4,8 +4,8 @@ Private EN<->JA realtime translation workspace built for a small family group.
 
 ## Workspace layout
 
-- `client/` - React PWA for room join, transcript, glossary, corrections, provider control
-- `server/` - Fastify + `ws` room hub, sqlite persistence, provider pipeline abstraction
+- `client/` - React PWA for family session join (display name), transcript, glossary, corrections, provider control
+- `server/` - Fastify + `ws` realtime hub, sqlite persistence, provider pipeline abstraction
 - `shared/` - shared event contracts used by client and server
 
 ## Quick start
@@ -16,7 +16,7 @@ Private EN<->JA realtime translation workspace built for a small family group.
    - `npm run dev:server`
 3. Start client:
    - `npm run dev:client`
-4. Open two browser tabs/devices and connect to the same room code.
+4. Open two browser tabs/devices and connect with each person’s display name (one shared session for the family).
 
 ## Verification commands
 

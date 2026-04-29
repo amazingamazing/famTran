@@ -7,10 +7,9 @@ import {
 } from "./session-ui";
 
 describe("session-ui helpers", () => {
-  it("auto-connects only when saved identity exists and no prior attempt", () => {
+  it("auto-connects only when saved display name exists and no prior attempt", () => {
     expect(
       shouldAutoConnectFromSavedSession({
-        roomId: "ANACORN",
         displayName: "Alex",
         connected: false,
         alreadyAttempted: false
@@ -19,8 +18,7 @@ describe("session-ui helpers", () => {
 
     expect(
       shouldAutoConnectFromSavedSession({
-        roomId: "   ",
-        displayName: "Alex",
+        displayName: "   ",
         connected: false,
         alreadyAttempted: false
       })
@@ -28,7 +26,6 @@ describe("session-ui helpers", () => {
 
     expect(
       shouldAutoConnectFromSavedSession({
-        roomId: "ANACORN",
         displayName: "Alex",
         connected: true,
         alreadyAttempted: false
@@ -37,7 +34,6 @@ describe("session-ui helpers", () => {
 
     expect(
       shouldAutoConnectFromSavedSession({
-        roomId: "ANACORN",
         displayName: "Alex",
         connected: false,
         alreadyAttempted: true

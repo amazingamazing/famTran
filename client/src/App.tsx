@@ -240,7 +240,6 @@ function App() {
   const autoConnectAttemptedRef = useRef(false);
   const connectRef = useRef<() => void>(() => undefined);
   const stopMicTestRef = useRef<() => Promise<void>>(async () => {});
-  const [roomId, setRoomId] = useState(() => getCookie("family_translation_room_id"));
   const [displayName, setDisplayName] = useState(() => getCookie("family_translation_display_name"));
   const [language, setLanguage] = useState<SupportedLanguage>(initialLanguage);
   const [contextNotes, setContextNotes] = useState(() => getCookie("family_translation_context_notes"));
@@ -269,7 +268,7 @@ function App() {
   const [controlsExpanded, setControlsExpanded] = useState(() =>
     readControlsExpandedPreference(
       window.localStorage,
-      !(getCookie("family_translation_room_id").trim() && getCookie("family_translation_display_name").trim())
+      !getCookie("family_translation_display_name").trim()
     )
   );
   const [playbackUnlocked, setPlaybackUnlocked] = useState(false);
@@ -415,12 +414,6 @@ function App() {
   }, [autoPilotEnabled]);
 
   useEffect(() => {
-    if (roomId.trim()) {
-      setCookie("family_translation_room_id", roomId.trim().toUpperCase());
-    }
-  }, [roomId]);
-
-  useEffect(() => {
     if (displayName.trim()) {
       setCookie("family_translation_display_name", displayName.trim());
     }
@@ -459,12 +452,10 @@ function App() {
       return false;
     }
     const turnId = createTurnId();
-    const normalizedRoomId = roomId.trim().toUpperCase();
     wsRef.current.send(
       JSON.stringify({
         type: "turn.start",
         turnId,
-        roomId: normalizedRoomId,
         speakerLanguage: language
       })
     );
@@ -472,7 +463,6 @@ function App() {
       JSON.stringify({
         type: "audio.input",
         turnId,
-        roomId: normalizedRoomId,
         payloadBase64: encodeStringAsBase64(messageText.trim()),
         sequence: 0,
         isLast: true
@@ -481,8 +471,7 @@ function App() {
     wsRef.current.send(
       JSON.stringify({
         type: "turn.stop",
-        turnId,
-        roomId: normalizedRoomId
+        turnId
       })
     );
     addDebugEvent(`turn.sent source=${source} turnId=${turnId} chars=${messageText.trim().length}`);
@@ -505,14 +494,14 @@ function App() {
   };
 
   const connect = () => {
-    if (!roomId.trim() || !displayName.trim()) {
-      setStatusMessage("Set room and display name first.");
+    if (!displayName.trim()) {
+      setStatusMessage("Set your display name first.");
       return;
     }
     wsRef.current?.close();
     const ws = new WebSocket(WS_BASE_URL);
     wsRef.current = ws;
-    addDebugEvent(`socket.connecting room=${roomId.trim().toUpperCase()} lang=${language}`);
+    addDebugEvent(`socket.connecting lang=${language}`);
 
     ws.onopen = () => {
       setStatusMessage("Socket connected");
@@ -520,7 +509,6 @@ function App() {
       ws.send(
         JSON.stringify({
           type: "session.join",
-          roomId: roomId.trim().toUpperCase(),
           displayName,
           language,
           mode: "text_only",
@@ -540,8 +528,8 @@ function App() {
         setConnected(true);
         clientIdRef.current = event.clientId;
         setClientId(event.clientId);
-        setStatusMessage(`Joined room ${event.roomId}`);
-        addDebugEvent(`session.joined room=${event.roomId} client=${event.clientId}`);
+        setStatusMessage("Connected");
+        addDebugEvent(`session.joined client=${event.clientId}`);
         if (autoPilotEnabled) {
           clearAutoPilotTimer();
           scheduleAutoPilot();
@@ -655,7 +643,6 @@ function App() {
 
   useEffect(() => {
     const shouldAutoConnect = shouldAutoConnectFromSavedSession({
-      roomId,
       displayName,
       connected,
       alreadyAttempted: autoConnectAttemptedRef.current
@@ -666,7 +653,7 @@ function App() {
     autoConnectAttemptedRef.current = true;
     addDebugEvent("session.auto_connect.attempt");
     connectRef.current();
-  }, [connected, displayName, roomId]);
+  }, [connected, displayName]);
 
   const disconnect = () => {
     clearAutoPilotTimer();
@@ -699,8 +686,7 @@ function App() {
       wsRef.current.send(
         JSON.stringify({
           type: "turn.stop",
-          turnId: micTurnIdRef.current,
-          roomId: roomId.trim().toUpperCase()
+          turnId: micTurnIdRef.current
         })
       );
     }
@@ -745,7 +731,6 @@ function App() {
         JSON.stringify({
           type: "turn.start",
           turnId,
-          roomId: roomId.trim().toUpperCase(),
           speakerLanguage: language
         })
       );
@@ -763,7 +748,6 @@ function App() {
           JSON.stringify({
             type: "audio.input",
             turnId: micTurnIdRef.current,
-            roomId: roomId.trim().toUpperCase(),
             payloadBase64,
             sequence: micSequenceRef.current,
             isLast: false
@@ -796,14 +780,13 @@ function App() {
   };
 
   const saveGlossary = async () => {
-    if (!roomId.trim() || !clientId || !manualTerm.trim() || !manualTranslation.trim()) {
+    if (!clientId || !manualTerm.trim() || !manualTranslation.trim()) {
       return;
     }
     const response = await fetch(`${HTTP_BASE_URL}/api/glossary`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        roomId: roomId.trim().toUpperCase(),
         userId: clientId,
         term: manualTerm.trim(),
         translation: manualTranslation.trim(),
@@ -826,7 +809,6 @@ function App() {
     wsRef.current.send(
       JSON.stringify({
         type: "correction.submit",
-        roomId: roomId.trim().toUpperCase(),
         wrongText: correctionWrong.trim(),
         rightText: correctionRight.trim(),
         context: correctionContext.trim()
@@ -881,7 +863,6 @@ function App() {
         connected,
         networkOnline,
         statusMessage,
-        roomId: roomId.trim().toUpperCase(),
         clientId,
         displayName,
         language,
@@ -912,7 +893,7 @@ function App() {
         originalText: item.originalText,
         debug: item.debug
       })),
-      recentRoomDebugTurns: debugTurnsRef.current.slice(0, 20),
+      recentDebugTurns: debugTurnsRef.current.slice(0, 20),
       recentEvents: debugEventsRef.current
     };
 
@@ -956,10 +937,6 @@ function App() {
       {controlsExpanded ? (
         <section className="panel grid2">
           <label>
-            Room code
-            <input value={roomId} onChange={(event) => setRoomId(event.target.value)} placeholder="ABC123" />
-          </label>
-          <label>
             Display name
             <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Alex" />
           </label>
@@ -988,12 +965,8 @@ function App() {
         </section>
       ) : (
         <section className="panel compactSessionPanel">
-          <h2 className="roomInfoHeading">Room information</h2>
+          <h2 className="roomInfoHeading">Session</h2>
           <div className="compactInfoGrid">
-            <div className="compactInfoCell">
-              <span className="compactInfoLabel">Room</span>
-              <span className="compactInfoValue">{roomId.trim().toUpperCase() || "—"}</span>
-            </div>
             <div className="compactInfoCell">
               <span className="compactInfoLabel">Name</span>
               <span className="compactInfoValue">{displayName.trim() || "—"}</span>

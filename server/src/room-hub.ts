@@ -8,7 +8,7 @@ import { DgPcmStream } from "./deepgram-stream.js";
 import type { AppDb } from "./db.js";
 import type { ProviderPipeline, SynthesisResult, TranscribeForTurnOutput } from "./providers.js";
 
-type RoomParticipant = {
+type SessionParticipant = {
   clientId: string;
   socket: WebSocket;
   displayName: string;
@@ -17,13 +17,7 @@ type RoomParticipant = {
   contextNotes: string;
 };
 
-type RoomState = {
-  roomId: string;
-  participants: Map<string, RoomParticipant>;
-};
-
 type ActiveTurn = {
-  roomId: string;
   speakerId: string;
   sourceLanguage: SupportedLanguage;
   audioChunks: Buffer[];
@@ -80,16 +74,15 @@ const decodeAudioBytes = (payloadBase64: string): Buffer | null => {
 const sleepMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export class RoomHub {
-  private readonly rooms = new Map<string, RoomState>();
-  private readonly clientToRoom = new Map<string, string>();
+  /** Everyone in the single family session. */
+  private readonly participants = new Map<string, SessionParticipant>();
   private readonly activeTurns = new Map<string, ActiveTurn>();
 
   constructor(private readonly db: AppDb, private readonly providers: ProviderPipeline) {}
 
   join(socket: WebSocket, event: Extract<ClientEvent, { type: "session.join" }>) {
     const clientId = randomUUID();
-    const room = this.ensureRoom(event.roomId);
-    room.participants.set(clientId, {
+    this.participants.set(clientId, {
       clientId,
       socket,
       displayName: event.displayName,
@@ -97,9 +90,8 @@ export class RoomHub {
       hearAudio: event.hearAudio,
       contextNotes: event.contextNotes
     });
-    this.clientToRoom.set(clientId, room.roomId);
 
-    this.send(socket, { type: "session.joined", roomId: room.roomId, clientId });
+    this.send(socket, { type: "session.joined", clientId });
     this.send(socket, {
       type: "providers.updated",
       ...this.providers.getProviders()
@@ -118,25 +110,13 @@ export class RoomHub {
       }
     }
 
-    const roomId = this.clientToRoom.get(clientId);
-    if (!roomId) {
-      return;
-    }
-    const room = this.rooms.get(roomId);
-    if (room) {
-      room.participants.delete(clientId);
-      if (room.participants.size === 0) {
-        this.rooms.delete(roomId);
-      }
-    }
-    this.clientToRoom.delete(clientId);
+    this.participants.delete(clientId);
   }
 
   async handleEvent(clientId: string, event: ClientEvent) {
     switch (event.type) {
       case "turn.start":
         this.activeTurns.set(event.turnId, {
-          roomId: event.roomId,
           speakerId: clientId,
           sourceLanguage: event.speakerLanguage,
           audioChunks: [],
@@ -166,18 +146,17 @@ export class RoomHub {
           if (key && this.providers.getProviders().stt === "deepgram") {
             if (!turn.dgStream) {
               const tId = event.turnId;
-              const rId = event.roomId;
               const live = this.shouldLiveCaptions();
               turn.dgStream = new DgPcmStream(key, turn.sourceLanguage, {
                 endpointingMs:
                   appConfig.deepgramLiveEndpointingMs > 0 ? appConfig.deepgramLiveEndpointingMs : undefined,
                 onTranscript: live
                   ? (sourceText: string) => {
-                      this.scheduleLiveCaption({ turnId: tId, roomId: rId, sourceText });
+                      this.scheduleLiveCaption({ turnId: tId, sourceText });
                     }
                   : undefined,
                 onFinalSegment: (segmentText: string) => {
-                  this.queueStreamSegmentCommit({ turnId: tId, roomId: rId, segmentText });
+                  this.queueStreamSegmentCommit({ turnId: tId, segmentText });
                 }
               });
             }
@@ -191,7 +170,6 @@ export class RoomHub {
         return;
       case "correction.submit":
         this.db.insertCorrection({
-          roomId: event.roomId,
           userId: clientId,
           wrongText: event.wrongText,
           rightText: event.rightText,
@@ -220,13 +198,13 @@ export class RoomHub {
     }
     this.clearLiveCaptionSchedule(turn);
     if (appConfig.liveCaptions && this.shouldSttStream() && turn.latestLiveSource.trim().length > 0) {
-      await this.flushLiveCaptions(turnId, turn.roomId);
+      await this.flushLiveCaptions(turnId);
     }
     if (appConfig.utteranceCommitDelayMs > 0) {
       await sleepMs(appConfig.utteranceCommitDelayMs);
     }
-    const room = this.rooms.get(turn.roomId);
-    if (!room) {
+    const sourceSpeaker = this.participants.get(turn.speakerId);
+    if (!sourceSpeaker) {
       this.activeTurns.delete(turnId);
       return;
     }
@@ -239,8 +217,7 @@ export class RoomHub {
     const turnTranscription = await this.resolveTranscription(turn);
     const transcription = turnTranscription.result;
     const fullSourceText = transcription.value.trim();
-    const sourceSpeaker = room.participants.get(turn.speakerId);
-    if (!sourceSpeaker || fullSourceText.length === 0) {
+    if (fullSourceText.length === 0) {
       this.activeTurns.delete(turnId);
       return;
     }
@@ -251,7 +228,6 @@ export class RoomHub {
       if (fullSourceText === committed) {
         await this.finalizeStreamedTurnDebugOnly({
           turnId,
-          room,
           turn,
           fullSourceText,
           turnTranscription
@@ -264,7 +240,6 @@ export class RoomHub {
         if (remainder.length === 0) {
           await this.finalizeStreamedTurnDebugOnly({
             turnId,
-            room,
             turn,
             fullSourceText,
             turnTranscription
@@ -276,14 +251,14 @@ export class RoomHub {
     }
 
     const glossaryLines = this.db
-      .listGlossary(turn.roomId)
+      .listGlossary()
       .map((entry) => `${entry.term} -> ${entry.translation} (${entry.notes})`);
     const correctionLines = this.db
-      .latestCorrections(turn.roomId)
+      .latestCorrections()
       .map((entry) => `${entry.wrongText} => ${entry.rightText} (${entry.context})`);
-    const recentTurns = this.db.latestTurns(turn.roomId);
+    const recentTurns = this.db.latestTurns();
 
-    const participants = [...room.participants.values()];
+    const participants = [...this.participants.values()];
     const translateContext = { glossaryLines, correctionLines, recentTurns };
 
     const turnRows = await Promise.all(
@@ -331,7 +306,7 @@ export class RoomHub {
       return p;
     };
 
-    const sendPcm = (recipient: RoomParticipant, ttsLanguage: SupportedLanguage, speech: SynthesisResult) => {
+    const sendPcm = (recipient: SessionParticipant, ttsLanguage: SupportedLanguage, speech: SynthesisResult) => {
       this.send(recipient.socket, {
         type: "audio.chunk",
         turnId,
@@ -349,7 +324,6 @@ export class RoomHub {
       const shouldSynthesizeTts = listenerGetsTts;
 
       this.db.insertTurn({
-        roomId: turn.roomId,
         turnId,
         speakerId: sourceSpeaker.clientId,
         sourceLanguage: turn.sourceLanguage,
@@ -400,7 +374,6 @@ export class RoomHub {
     this.broadcastToAll({
       type: "debug.turn",
       turnId,
-      roomId: turn.roomId,
       speakerId: sourceSpeaker.clientId,
       sourceLanguage: turn.sourceLanguage,
       originalText: fullSourceText,
@@ -432,7 +405,7 @@ export class RoomHub {
     }
   }
 
-  private scheduleLiveCaption(args: { turnId: string; roomId: string; sourceText: string }) {
+  private scheduleLiveCaption(args: { turnId: string; sourceText: string }) {
     const turn = this.activeTurns.get(args.turnId);
     if (!turn) {
       return;
@@ -444,17 +417,13 @@ export class RoomHub {
     const waitMs = 400;
     turn.liveDebounce = setTimeout(() => {
       turn.liveDebounce = null;
-      void this.flushLiveCaptions(args.turnId, args.roomId);
+      void this.flushLiveCaptions(args.turnId);
     }, waitMs);
   }
 
-  private async flushLiveCaptions(turnId: string, roomId: string) {
+  private async flushLiveCaptions(turnId: string) {
     const turn = this.activeTurns.get(turnId);
     if (!turn) {
-      return;
-    }
-    const room = this.rooms.get(roomId);
-    if (!room) {
       return;
     }
     const sourceText = turn.latestLiveSource.trim();
@@ -465,16 +434,15 @@ export class RoomHub {
     // One sequence number per debounced flush (not per STT frame).
     turn.liveSeq += 1;
     const seqAtStart = turn.liveSeq;
-    const sourceSpeaker = room.participants.get(turn.speakerId);
+    const sourceSpeaker = this.participants.get(turn.speakerId);
     if (!sourceSpeaker) {
       return;
     }
 
-    const sendLive = (participant: RoomParticipant, translatedText: string) => {
+    const sendLive = (participant: SessionParticipant, translatedText: string) => {
       this.send(participant.socket, {
         type: "transcript.live",
         turnId,
-        roomId,
         speakerId: turn.speakerId,
         sourceLanguage: turn.sourceLanguage,
         targetLanguage: participant.language,
@@ -495,7 +463,7 @@ export class RoomHub {
     sendLive(sourceSpeaker, sourceSnapshot);
   }
 
-  private queueStreamSegmentCommit(args: { turnId: string; roomId: string; segmentText: string }) {
+  private queueStreamSegmentCommit(args: { turnId: string; segmentText: string }) {
     const turn = this.activeTurns.get(args.turnId);
     if (!turn || !this.shouldSttStream()) {
       return;
@@ -506,32 +474,28 @@ export class RoomHub {
     }
     turn.segmentPipeline = turn.segmentPipeline
       .catch(() => undefined)
-      .then(() => this.deliverCommittedPhrase({ turnId: args.turnId, roomId: args.roomId, segmentText: segment }));
+      .then(() => this.deliverCommittedPhrase({ turnId: args.turnId, segmentText: segment }));
   }
 
-  private async deliverCommittedPhrase(args: { turnId: string; roomId: string; segmentText: string }) {
+  private async deliverCommittedPhrase(args: { turnId: string; segmentText: string }) {
     const turn = this.activeTurns.get(args.turnId);
     if (!turn) {
       return;
     }
-    const room = this.rooms.get(args.roomId);
-    if (!room) {
-      return;
-    }
-    const sourceSpeaker = room.participants.get(turn.speakerId);
+    const sourceSpeaker = this.participants.get(turn.speakerId);
     if (!sourceSpeaker) {
       return;
     }
 
     const sourceText = args.segmentText;
     const glossaryLines = this.db
-      .listGlossary(turn.roomId)
+      .listGlossary()
       .map((entry) => `${entry.term} -> ${entry.translation} (${entry.notes})`);
     const correctionLines = this.db
-      .latestCorrections(turn.roomId)
+      .latestCorrections()
       .map((entry) => `${entry.wrongText} => ${entry.rightText} (${entry.context})`);
-    const recentTurns = this.db.latestTurns(turn.roomId);
-    const participants = [...room.participants.values()];
+    const recentTurns = this.db.latestTurns();
+    const participants = [...this.participants.values()];
     const translateContext = { glossaryLines, correctionLines, recentTurns };
 
     const turnRows = await Promise.all(
@@ -579,7 +543,7 @@ export class RoomHub {
       return p;
     };
 
-    const sendPcm = (recipient: RoomParticipant, ttsLanguage: SupportedLanguage, speech: SynthesisResult) => {
+    const sendPcm = (recipient: SessionParticipant, ttsLanguage: SupportedLanguage, speech: SynthesisResult) => {
       this.send(recipient.socket, {
         type: "audio.chunk",
         turnId: args.turnId,
@@ -596,7 +560,6 @@ export class RoomHub {
       const listenerGetsTts = participant.clientId !== turn.speakerId && participant.hearAudio;
 
       this.db.insertTurn({
-        roomId: turn.roomId,
         turnId: args.turnId,
         speakerId: sourceSpeaker.clientId,
         sourceLanguage: turn.sourceLanguage,
@@ -642,18 +605,17 @@ export class RoomHub {
 
   private async finalizeStreamedTurnDebugOnly(args: {
     turnId: string;
-    room: RoomState;
     turn: ActiveTurn;
     fullSourceText: string;
     turnTranscription: TranscribeForTurnOutput;
   }) {
-    const sourceSpeaker = args.room.participants.get(args.turn.speakerId);
+    const sourceSpeaker = this.participants.get(args.turn.speakerId);
     if (!sourceSpeaker) {
       this.activeTurns.delete(args.turnId);
       return;
     }
     const transcription = args.turnTranscription.result;
-    const participants = [...args.room.participants.values()];
+    const participants = [...this.participants.values()];
     const participantDebugRows = participants.map((participant) => ({
       clientId: participant.clientId,
       displayName: participant.displayName,
@@ -672,7 +634,6 @@ export class RoomHub {
     this.broadcastToAll({
       type: "debug.turn",
       turnId: args.turnId,
-      roomId: args.room.roomId,
       speakerId: sourceSpeaker.clientId,
       sourceLanguage: args.turn.sourceLanguage,
       originalText: args.fullSourceText,
@@ -716,16 +677,6 @@ export class RoomHub {
     });
   }
 
-  private ensureRoom(roomId: string): RoomState {
-    const existing = this.rooms.get(roomId);
-    if (existing) {
-      return existing;
-    }
-    const room: RoomState = { roomId, participants: new Map() };
-    this.rooms.set(roomId, room);
-    return room;
-  }
-
   private send(socket: WebSocket, event: ServerEvent) {
     if (socket.readyState !== 1) {
       return;
@@ -734,10 +685,8 @@ export class RoomHub {
   }
 
   private broadcastToAll(event: ServerEvent) {
-    for (const room of this.rooms.values()) {
-      for (const participant of room.participants.values()) {
-        this.send(participant.socket, event);
-      }
+    for (const participant of this.participants.values()) {
+      this.send(participant.socket, event);
     }
   }
 }

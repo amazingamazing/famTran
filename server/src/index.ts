@@ -11,15 +11,6 @@ import { AppDb } from "./db.js";
 import { InMemoryProviderPipeline } from "./providers.js";
 import { RoomHub } from "./room-hub.js";
 
-const createRoomCode = () => {
-  const alphabet = "ABCDEFGHJKMNPQRSTVWXYZ23456789";
-  let value = "";
-  for (let i = 0; i < 6; i += 1) {
-    value += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
-  return value;
-};
-
 const resolveClientDistPath = () => {
   const cwdCandidate = path.resolve(process.cwd(), "client", "dist");
   if (fs.existsSync(cwdCandidate)) {
@@ -51,20 +42,17 @@ const boot = async () => {
 
   app.get("/health", async () => ({ ok: true }));
 
-  app.post("/api/rooms", async () => ({ roomId: createRoomCode() }));
-
   app.post(
     "/api/glossary",
     async (request) => {
       const schema = z.object({
-        roomId: z.string().min(3),
         userId: z.string().min(1),
         term: z.string().min(1),
         translation: z.string().min(1),
         notes: z.string().optional().default("")
       });
       const payload = schema.parse(request.body as unknown);
-      db.upsertGlossary(payload.roomId, payload.userId, payload.term, payload.translation, payload.notes);
+      db.upsertGlossary(payload.userId, payload.term, payload.translation, payload.notes);
       return { ok: true };
     }
   );

@@ -18,7 +18,6 @@ export type ServerEvent =
   | {
       type: "session.joined";
       clientId: string;
-      roomId: string;
     }
   | {
       type: "transcript.chunk";
@@ -46,7 +45,6 @@ export type ServerEvent =
   | {
       type: "transcript.live";
       turnId: string;
-      roomId: string;
       speakerId: string;
       sourceLanguage: SupportedLanguage;
       targetLanguage: SupportedLanguage;
@@ -77,7 +75,6 @@ export type ServerEvent =
   | {
       type: "debug.turn";
       turnId: string;
-      roomId: string;
       speakerId: string;
       sourceLanguage: SupportedLanguage;
       originalText: string;
@@ -106,7 +103,6 @@ export type ServerEvent =
 export type ClientEvent =
   | {
       type: "session.join";
-      roomId: string;
       displayName: string;
       language: SupportedLanguage;
       mode: ClientMode;
@@ -116,13 +112,11 @@ export type ClientEvent =
   | {
       type: "turn.start";
       turnId: string;
-      roomId: string;
       speakerLanguage: SupportedLanguage;
     }
   | {
       type: "audio.input";
       turnId: string;
-      roomId: string;
       payloadBase64: string;
       sequence: number;
       isLast: boolean;
@@ -130,11 +124,9 @@ export type ClientEvent =
   | {
       type: "turn.stop";
       turnId: string;
-      roomId: string;
     }
   | {
       type: "correction.submit";
-      roomId: string;
       wrongText: string;
       rightText: string;
       context?: string;
@@ -148,4 +140,3 @@ export type ClientEvent =
 
 export const isSupportedLanguage = (value: string): value is SupportedLanguage =>
   value === "en" || value === "ja";
-

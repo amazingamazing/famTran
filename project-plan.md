@@ -14,7 +14,7 @@ The short version: an all-in-one speech-to-speech API (OpenAI Realtime, Gemini L
 | VAD | **`@ricky0123/vad-web` (silero-vad via ONNX + AudioWorklet)**, with a push-to-talk toggle and Deepgram server-side `UtteranceEnd` as safety net | Silero is the de-facto browser VAD; language-agnostic so it handles JA fine. Tune `minSpeechFrames`/`redemptionFrames` up ~50% for Japanese, which has more intra-sentence pauses than English. |
 | Transport | **Plain WebSocket** (`ws` on server, native `WebSocket` in browser). Binary frames for audio, JSON for control | For 2–6 users with server-mediated, per-listener-different audio, mesh/SFU are architecturally wrong — they exist to fan *the same* media out, and you never have "the same" media. WebSocket also sidesteps iOS's long history of `RTCPeerConnection` bugs in standalone PWAs. |
 | Backend host | **Render Starter web service ($7/mo)** + 1 GB persistent disk (~$0.25) | User already uses it. Always-on, first-class WebSocket support, no cold starts, runs a normal Node process with native deps if needed. Fly.io is a close runner-up at ~$2/mo but is a lateral move. |
-| Backend runtime | **Node 20 + Fastify + `ws`** | Fastify for HTTP routes (room create, glossary CRUD), `ws` for the realtime hub. Avoid Socket.IO — extra protocol you don't need. |
+| Backend runtime | **Node 20 + Fastify + `ws`** | Fastify for HTTP routes (glossary CRUD, health), `ws` for the realtime hub. Avoid Socket.IO — extra protocol you don't need. |
 | Storage | **SQLite via `better-sqlite3`** on the Render disk | Zero ops. Render's managed Postgres free tier expires after 30 days and you don't need it. Turso would be the only reasonable remote alternative. |
 | STT | **Deepgram Nova-3 Multilingual** (`model=nova-3&language=multi`), streaming WebSocket | Sub-300 ms first-partial; JA support GA'd in 2025; built-in `endpointing` and `UtteranceEnd` for free server-side safety-net VAD; $200 free credit covers the whole month. JA WER is "Tier 2" (≈7–16 % band per Deepgram's own multilingual guide) which is adequate when you're also injecting proper nouns via the context box. |
 | STT fallback | `gpt-4o-transcribe` via OpenAI Realtime transcription-only session | Higher JA accuracy ceiling (top-tier on FLEURS per OpenAI; ~2.5 % EN, estimated 8–12 % JA) but first-partial latency runs 500 ms–2 s per community reports — worse than Deepgram. Keep it behind a provider flag so you can A/B on your own family's voices. |
@@ -22,7 +22,7 @@ The short version: an all-in-one speech-to-speech API (OpenAI Realtime, Gemini L
 | TTS | **Cartesia Sonic-2**, WebSocket streaming, PCM 22.05 kHz output | ~90 ms time-to-first-audio (vendor + partner testing), native Japanese voices (6+ explicitly ja-tagged), fully multilingual voice IDs so **one voice_id per speaker covers both languages**. **Startup plan $49/mo, 1.25 M credits** fits in budget with headroom. ElevenLabs Flash v2.5 is the runner-up at ~75 ms model inference / ~150–200 ms real TTFB and a much larger JA voice library, but its Creator tier ($22) only gets you ~200 k Flash chars and you'll go over fast at scale. |
 | All-in-one Realtime/Live | **Explicitly rejected** | OpenAI's own translation cookbook (`one_way_translation_using_realtime_api`) runs **one Realtime session per target language** — that's 2× cost for a 2-language room and blocks distinct-per-speaker voices because each session has one voice. Gemini Live has the same per-session voice/target limitation. At 2 sessions, Realtime costs ~$0.40–0.60/min; our pipeline costs ~$0.04–0.08/min. |
 
-Everything else — persistence, auth, room codes — goes in SQLite, and the "auth" is the unguessable 6-character Crockford-base32 room code in the URL the QR encodes.
+Everything else — persistence and per-user context — goes in SQLite. The app targets a **single shared family session** (no room codes or multi-room routing); access control is whatever you put in front of the deployment (private URL, VPN, etc.).
 
 ## Text architecture diagram
 
@@ -39,14 +39,14 @@ Everything else — persistence, auth, room codes — goes in SQLite, and the "a
                                                            ▼        │
              ┌──────────────── Render Node server (Fastify + ws) ───┴───────┐
              │                                                              │
-             │  RoomHub ──► per-room state                                  │
+             │  Session hub ──► shared session state                          │
              │       │                                                      │
              │       ├─► Deepgram Nova-3 WSS (one per active speaker)       │
              │       │        │ interim + final transcripts                 │
              │       │        ▼                                             │
              │       ├─► Gemini 2.5 Flash (streaming, one call per target   │
-             │       │   language present in the room, with glossary +     │
-             │       │   context box of **speaker's** room-mates injected) │
+             │       │   language present in the session, with glossary +   │
+             │       │   context box of **speaker's** session-mates injected) │
              │       │        │ streamed text tokens                        │
              │       │        ▼                                             │
              │       ├─► Cartesia Sonic-2 WSS (one generation per target    │
@@ -137,9 +137,9 @@ This is comfortably under "a few hundred dollars." If your real volume lands at 
 Claude-in-Cursor will one-shot or near-one-shot most of this. The gotchas cluster on iOS Safari PWA behavior and WebSocket-audio plumbing — those need a human with a phone in hand, not just Cursor.
 
 **One-shot territory** (Cursor will nail it on the first or second prompt):
-- Vite + React + TypeScript scaffold, `vite-plugin-pwa` manifest, room-code generation, basic Fastify + `ws` server, SQLite schema, Deepgram WebSocket client in Node, Gemini translate per committed utterance (full string in, full string out), Cartesia HTTP/bytes one-shot TTS per line, QR code generation (use `qrcode` npm package on an `/r/:id` landing page).
+- Vite + React + TypeScript scaffold, `vite-plugin-pwa` manifest, basic Fastify + `ws` server, SQLite schema, Deepgram WebSocket client in Node, Gemini translate per committed utterance (full string in, full string out), Cartesia HTTP/bytes one-shot TTS per line.
 - React UI for per-user language picker, hear-audio toggle, context-box textarea, live-transcript list, PTT button.
-- Room-level state machine on the server.
+- Session-level state machine on the server (one hub for all connected family clients).
 
 **Needs iteration and manual testing on a real iPhone** (expect 2–4 attempts per item):
 - **iOS PWA install UX + the AudioContext unlock dance.** You *must* call `audioCtx.resume()` inside a synchronous user-gesture handler, and iOS 17 has had regressions where the context re-suspends (WebKit #261554, #263627). Ship a visible "Reconnect audio" button that calls `audioContext.close()` and creates a fresh one — users will hit the suspend bug. iOS 26.0.1 (Oct 2025) also broke PWA audio playback for many users; build in a retry path.
@@ -155,7 +155,7 @@ Claude-in-Cursor will one-shot or near-one-shot most of this. The gotchas cluste
 
 **Genuinely tricky** (plan for a day of yak-shaving):
 - **silero-vad in a PWA on iOS.** The library works in Safari, but you need to serve the ONNX model and Worklet bundle from your origin (not jsDelivr) for PWA offline-install reliability, and tune thresholds for Japanese. If it fights back, ship with PTT default-on.
-- **Voice assignment UI.** Keep it simple: map the first 6 Cartesia Japanese voice UUIDs to speaker slots 1–6 on room creation; let users rename their slot if they care.
+- **Voice assignment UI.** Keep it simple: map the first 6 Cartesia Japanese voice UUIDs to speaker slots 1–6; let users rename their slot if they care.
 
 **Things Cursor will *not* help with:** the iOS version-to-version audio regressions. There's no training data for "iOS 26.0.1 broke X." You'll diagnose those yourself with a spare iPhone.
 
@@ -163,7 +163,7 @@ Claude-in-Cursor will one-shot or near-one-shot most of this. The gotchas cluste
 
 Simplest design that actually works:
 
-**Storage (SQLite):** three tables — `glossary(user_id, term, translation, notes)` for the context box entries, `turns(room_id, ts, speaker, src_lang, src_text, tgt_lang, tgt_text)` as an audit log, and `corrections(user_id, wrong, right, context)` for post-hoc fixes ("that was Hiroko, not Hiroshi"). Edit the context box → upsert glossary rows. Tap "fix this" on a mistranslated transcript → insert into corrections.
+**Storage (SQLite):** three tables — `glossary(user_id, term, translation, notes)` for the context box entries, `turns(ts, speaker, src_lang, src_text, tgt_lang, tgt_text)` as an audit log, and `corrections(user_id, wrong, right, context)` for post-hoc fixes ("that was Hiroko, not Hiroshi"). Edit the context box → upsert glossary rows. Tap "fix this" on a mistranslated transcript → insert into corrections.
 
 **Prompt injection (Gemini system prompt template, regenerated per utterance):**
 
@@ -171,7 +171,7 @@ Simplest design that actually works:
 You are a real-time JA↔EN interpreter for a family conversation.
 Translate from {src_lang} to {tgt_lang}. Output ONLY the translation.
 
-People in this room (with pronunciations and relationships):
+People in this session (with pronunciations and relationships):
 {speaker_context_box}
 {listener_context_boxes_merged}
 
@@ -186,13 +186,13 @@ Register: casual family chat. Preserve proper nouns and code-switched words as-i
 
 That's it. Regenerate the prompt each turn — at 500–800 tokens it costs fractions of a cent. **No MCP server.** MCP is for giving AI assistants tools at inference time; your translation LLM doesn't need tools, it needs strings in its prompt. Using MCP during *development* to let Cursor introspect live app state is cute but not worth the ceremony for a one-month project.
 
-Cross-session learning is just "read the corrections table at room-join and include the top N." No embeddings, no retrieval. At low-thousands of corrections lifetime, exact text matching with a recency weight is fine and more predictable than a vector store.
+Cross-session learning is just "read the corrections table on connect and include the top N." No embeddings, no retrieval. At low-thousands of corrections lifetime, exact text matching with a recency weight is fine and more predictable than a vector store.
 
 ## Build sequence
 
 Nine steps, roughly a weekend each if you're working evenings, tighter if you go straight through.
 
-1. **Scaffold and deploy an empty room.** Vite + React + TypeScript client; Fastify + `ws` server on Render Starter; SQLite file on `/data`. Route `/r/:id` renders a join page. Room code generator. QR via `qrcode` on the create page. Prove: two devices can open the same room URL and exchange a "hello" chat message over WebSocket. *Do this first because every debugging loop afterward depends on this working.*
+1. **Scaffold and deploy a shared session.** Vite + React + TypeScript client; Fastify + `ws` server on Render Starter; SQLite file on `/data`. Prove: two devices can open the app and exchange a "hello" over WebSocket on the single family hub. *Do this first because every debugging loop afterward depends on this working.*
 
 2. **Mic capture to server round-trip.** AudioWorklet emitting 16 kHz PCM16, binary-framed to server, server logs chunk sizes. Test on a real iPhone PWA install, not just desktop Safari. Handle the AudioContext unlock gesture. Do not move on until audio reliably flows on iOS home-screen install.
 
@@ -208,14 +208,14 @@ Nine steps, roughly a weekend each if you're working evenings, tighter if you go
 
 8. **Polish the iOS PWA edges.** Manifest tweaks, icons, install prompt, "keep screen on" warning modal, reconnect button, WebSocket resume logic, `navigator.onLine` banner, "hear audio" toggle actually mutes playback without killing the transcript stream.
 
-9. **Room-scaling to 3–6 participants, and then use it with your family.** Multiple concurrent STT streams, fan-out of TTS to all eligible listeners, per-target-language translation deduplication (one translate call per target language, not per listener). Ship.
+9. **Scale to 3–6 participants, and then use it with your family.** Multiple concurrent STT streams, fan-out of TTS to all eligible listeners, per-target-language translation deduplication (one translate call per target language, not per listener). Ship.
 
 ## What I'd do differently only if X
 
 - **If the family turns out to be heavily monolingual with one bilingual pivot:** drop to a single-direction model and consider OpenAI's Realtime translation cookbook pattern — one session per target language is bearable when there's only one target.
 - **If Japanese WER from Deepgram disappoints in your first week:** swap STT to OpenAI `gpt-4o-transcribe` via the Realtime API behind the same interface. Expect +500–1000 ms latency but materially better JA.
 - **If latency feels slow despite the pipeline:** the fix is almost always the translate step. Try Groq- or Cerebras-hosted inference for Gemma/Llama of comparable quality — they regularly deliver sub-200 ms TTFT, which would shave 300 ms off end-to-end.
-- **If you outgrow "personal use" and go to many concurrent rooms:** revisit LiveKit Cloud + Agents, whose free tier and pipeline recipes genuinely shine once you're managing dozens of sessions — but only if you relax the per-listener-different-language requirement.
+- **If you outgrow "personal use" and need many isolated groups:** revisit LiveKit Cloud + Agents, whose free tier and pipeline recipes genuinely shine once you're managing dozens of sessions — but only if you relax the per-listener-different-language requirement.
 
 ## Bottom line
 

@@ -63,7 +63,6 @@ describe("RoomHub", () => {
     const jaSocket = new MockSocket();
     const enClientId = hub.join(enSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Alex",
       language: "en",
       mode: "text_only",
@@ -73,7 +72,6 @@ describe("RoomHub", () => {
 
     hub.join(jaSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Yuki",
       language: "ja",
       mode: "text_only",
@@ -84,13 +82,11 @@ describe("RoomHub", () => {
     await hub.handleEvent(enClientId, {
       type: "turn.start",
       turnId: "turn-1",
-      roomId: "ROOM42",
       speakerLanguage: "en"
     });
     await hub.handleEvent(enClientId, {
       type: "audio.input",
       turnId: "turn-1",
-      roomId: "ROOM42",
       payloadBase64: Buffer.from("Hello family").toString("base64"),
       sequence: 0,
       isLast: true
@@ -98,7 +94,6 @@ describe("RoomHub", () => {
     await hub.handleEvent(enClientId, {
       type: "turn.stop",
       turnId: "turn-1",
-      roomId: "ROOM42"
     });
 
     const jaTranscriptMessage = jaSocket.sent.map((item) => JSON.parse(item)).find((event) => event.type === "transcript.chunk");
@@ -110,7 +105,6 @@ describe("RoomHub", () => {
     const enSocket = new MockSocket();
     const enClientId = hub.join(enSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Alex",
       language: "en",
       mode: "text_only",
@@ -120,13 +114,12 @@ describe("RoomHub", () => {
 
     await hub.handleEvent(enClientId, {
       type: "correction.submit",
-      roomId: "ROOM42",
       wrongText: "Pepe",
       rightText: "Peh-peh",
       context: "Family dog"
     });
 
-    const corrections = db.latestCorrections("ROOM42");
+    const corrections = db.latestCorrections();
     expect(corrections).toHaveLength(1);
     expect(corrections[0].rightText).toBe("Peh-peh");
   });
@@ -135,7 +128,6 @@ describe("RoomHub", () => {
     const socket = new MockSocket();
     const id = hub.join(socket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Alex",
       language: "en",
       mode: "text_only",
@@ -146,14 +138,12 @@ describe("RoomHub", () => {
     await hub.handleEvent(id, {
       type: "turn.start",
       turnId: "turn-dc",
-      roomId: "ROOM42",
       speakerLanguage: "en"
     });
     hub.leave(id);
     await hub.handleEvent(id, {
       type: "turn.stop",
       turnId: "turn-dc",
-      roomId: "ROOM42"
     });
 
     const debugTurns = socket.sent.map((item) => JSON.parse(item)).filter((event) => event.type === "debug.turn");
@@ -166,7 +156,6 @@ describe("RoomHub", () => {
     const jaSocket = new MockSocket();
     const speakerId = hub.join(speakerSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Speaker",
       language: "en",
       mode: "text_only",
@@ -175,7 +164,6 @@ describe("RoomHub", () => {
     });
     const otherId = hub.join(otherSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Other",
       language: "en",
       mode: "text_only",
@@ -184,7 +172,6 @@ describe("RoomHub", () => {
     });
     hub.join(jaSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Yuki",
       language: "ja",
       mode: "text_only",
@@ -195,13 +182,11 @@ describe("RoomHub", () => {
     await hub.handleEvent(speakerId, {
       type: "turn.start",
       turnId: "turn-own",
-      roomId: "ROOM42",
       speakerLanguage: "en"
     });
     await hub.handleEvent(otherId, {
       type: "audio.input",
       turnId: "turn-own",
-      roomId: "ROOM42",
       payloadBase64: Buffer.from("Evil").toString("base64"),
       sequence: 0,
       isLast: true
@@ -209,7 +194,6 @@ describe("RoomHub", () => {
     await hub.handleEvent(speakerId, {
       type: "audio.input",
       turnId: "turn-own",
-      roomId: "ROOM42",
       payloadBase64: Buffer.from("Hello").toString("base64"),
       sequence: 0,
       isLast: true
@@ -217,7 +201,6 @@ describe("RoomHub", () => {
     await hub.handleEvent(speakerId, {
       type: "turn.stop",
       turnId: "turn-own",
-      roomId: "ROOM42"
     });
 
     const jaChunks = jaSocket.sent.map((item) => JSON.parse(item)).filter((e) => e.type === "transcript.chunk");
@@ -230,7 +213,6 @@ describe("RoomHub", () => {
     const jaSocket = new MockSocket();
     const enClientId = hub.join(enSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Alex",
       language: "en",
       mode: "text_only",
@@ -240,7 +222,6 @@ describe("RoomHub", () => {
 
     hub.join(jaSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Yuki",
       language: "ja",
       mode: "text_only",
@@ -251,13 +232,11 @@ describe("RoomHub", () => {
     await hub.handleEvent(enClientId, {
       type: "turn.start",
       turnId: "turn-raw-audio",
-      roomId: "ROOM42",
       speakerLanguage: "en"
     });
     await hub.handleEvent(enClientId, {
       type: "audio.input",
       turnId: "turn-raw-audio",
-      roomId: "ROOM42",
       payloadBase64: Buffer.from([0, 0, 16, 255, 32, 128, 1, 254, 64, 192]).toString("base64"),
       sequence: 0,
       isLast: false
@@ -265,7 +244,6 @@ describe("RoomHub", () => {
     await hub.handleEvent(enClientId, {
       type: "turn.stop",
       turnId: "turn-raw-audio",
-      roomId: "ROOM42"
     });
 
     const transcriptMessages = jaSocket.sent.map((item) => JSON.parse(item)).filter((event) => event.type === "transcript.chunk");
@@ -286,7 +264,6 @@ describe("RoomHub", () => {
     const jaSocket = new MockSocket();
     const enClientId = hub.join(enSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Alex",
       language: "en",
       mode: "text_only",
@@ -296,7 +273,6 @@ describe("RoomHub", () => {
 
     hub.join(jaSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Yuki",
       language: "ja",
       mode: "text_only",
@@ -307,13 +283,11 @@ describe("RoomHub", () => {
     await hub.handleEvent(enClientId, {
       type: "turn.start",
       turnId: "turn-slow-tts",
-      roomId: "ROOM42",
       speakerLanguage: "en"
     });
     await hub.handleEvent(enClientId, {
       type: "audio.input",
       turnId: "turn-slow-tts",
-      roomId: "ROOM42",
       payloadBase64: Buffer.from("Hello family").toString("base64"),
       sequence: 0,
       isLast: true
@@ -322,7 +296,6 @@ describe("RoomHub", () => {
     await hub.handleEvent(enClientId, {
       type: "turn.stop",
       turnId: "turn-slow-tts",
-      roomId: "ROOM42"
     });
 
     const earlyEvents = jaSocket.sent.map((item) => JSON.parse(item));
@@ -338,12 +311,11 @@ describe("RoomHub", () => {
     expect(lateAudio).toBeDefined();
   });
 
-  it("broadcasts room-level debug turn details to all participants", async () => {
+  it("broadcasts debug turn details to all participants", async () => {
     const enSocket = new MockSocket();
     const jaSocket = new MockSocket();
     const enClientId = hub.join(enSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Alex",
       language: "en",
       mode: "text_only",
@@ -353,7 +325,6 @@ describe("RoomHub", () => {
 
     hub.join(jaSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Yuki",
       language: "ja",
       mode: "text_only",
@@ -364,13 +335,11 @@ describe("RoomHub", () => {
     await hub.handleEvent(enClientId, {
       type: "turn.start",
       turnId: "turn-debug",
-      roomId: "ROOM42",
       speakerLanguage: "en"
     });
     await hub.handleEvent(enClientId, {
       type: "audio.input",
       turnId: "turn-debug",
-      roomId: "ROOM42",
       payloadBase64: Buffer.from("Hello family").toString("base64"),
       sequence: 0,
       isLast: true
@@ -378,7 +347,6 @@ describe("RoomHub", () => {
     await hub.handleEvent(enClientId, {
       type: "turn.stop",
       turnId: "turn-debug",
-      roomId: "ROOM42"
     });
 
     const enDebugTurn = enSocket.sent
@@ -415,7 +383,6 @@ describe("RoomHub", () => {
     const jaSocket = new MockSocket();
     const enClientId = hub.join(enSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Alex",
       language: "en",
       mode: "text_only",
@@ -425,7 +392,6 @@ describe("RoomHub", () => {
 
     hub.join(jaSocket as never, {
       type: "session.join",
-      roomId: "ROOM42",
       displayName: "Yuki",
       language: "ja",
       mode: "text_only",
@@ -436,13 +402,11 @@ describe("RoomHub", () => {
     await hub.handleEvent(enClientId, {
       type: "turn.start",
       turnId: "turn-mime",
-      roomId: "ROOM42",
       speakerLanguage: "en"
     });
     await hub.handleEvent(enClientId, {
       type: "audio.input",
       turnId: "turn-mime",
-      roomId: "ROOM42",
       payloadBase64: Buffer.from("Hello family").toString("base64"),
       sequence: 0,
       isLast: true
@@ -450,7 +414,6 @@ describe("RoomHub", () => {
     await hub.handleEvent(enClientId, {
       type: "turn.stop",
       turnId: "turn-mime",
-      roomId: "ROOM42"
     });
 
     await new Promise((resolve) => setTimeout(resolve, 30));
