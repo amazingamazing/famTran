@@ -3,13 +3,16 @@ import path from "node:path";
 
 import Database from "better-sqlite3";
 
+import type { SupportedLanguage } from "@family-translation/shared";
+
 /** Single shared family session — no room scoping. */
 export type TurnRecord = {
   turnId: string;
   speakerId: string;
-  sourceLanguage: "en" | "ja";
+  speakerName: string;
+  sourceLanguage: SupportedLanguage;
   sourceText: string;
-  targetLanguage: "en" | "ja";
+  targetLanguage: SupportedLanguage;
   targetText: string;
 };
 
@@ -20,7 +23,19 @@ export type CorrectionRecord = {
   context: string;
 };
 
-const SCHEMA_VERSION = 2;
+export type HistoryRow = {
+  id: number;
+  turnId: string;
+  speakerId: string;
+  speakerName: string;
+  sourceLanguage: SupportedLanguage;
+  originalText: string;
+  targetLanguage: SupportedLanguage;
+  translatedText: string;
+  createdAt: number;
+};
+
+const SCHEMA_VERSION = 3;
 
 export class AppDb {
   private readonly db: Database.Database;
@@ -34,9 +49,9 @@ export class AppDb {
 
   private migrate() {
     const versionRaw = this.db.pragma("user_version", { simple: true });
-    const userVersion = typeof versionRaw === "number" ? versionRaw : Number(versionRaw);
+    let userVersion = typeof versionRaw === "number" ? versionRaw : Number(versionRaw);
 
-    if (userVersion < SCHEMA_VERSION) {
+    if (userVersion < 2) {
       this.db.exec(`
         DROP TABLE IF EXISTS glossary;
         DROP TABLE IF EXISTS turns;
@@ -56,6 +71,7 @@ export class AppDb {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           turn_id TEXT NOT NULL,
           speaker_id TEXT NOT NULL,
+          speaker_name TEXT NOT NULL DEFAULT '',
           source_language TEXT NOT NULL,
           source_text TEXT NOT NULL,
           target_language TEXT NOT NULL,
@@ -72,8 +88,16 @@ export class AppDb {
           created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
       `);
-      this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
+      userVersion = SCHEMA_VERSION;
+    } else if (userVersion === 2) {
+      this.db.exec(`ALTER TABLE turns ADD COLUMN speaker_name TEXT NOT NULL DEFAULT ''`);
+      userVersion = SCHEMA_VERSION;
     }
+
+    if (userVersion !== SCHEMA_VERSION) {
+      throw new Error(`Unexpected SQLite user_version ${userVersion}; expected ${SCHEMA_VERSION}`);
+    }
+    this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
   }
 
   upsertGlossary(userId: string, term: string, translation: string, notes: string) {
@@ -101,9 +125,9 @@ export class AppDb {
     this.db
       .prepare(
         `INSERT INTO turns(
-          turn_id, speaker_id, source_language, source_text, target_language, target_text
+          turn_id, speaker_id, speaker_name, source_language, source_text, target_language, target_text
         ) VALUES(
-          @turnId, @speakerId, @sourceLanguage, @sourceText, @targetLanguage, @targetText
+          @turnId, @speakerId, @speakerName, @sourceLanguage, @sourceText, @targetLanguage, @targetText
         )`
       )
       .run(turn);
@@ -118,6 +142,64 @@ export class AppDb {
          LIMIT @limit`
       )
       .all({ limit }) as Array<{ sourceText: string; targetText: string }>;
+  }
+
+  /**
+   * Paginated history for one viewer language (`target_language` rows).
+   * Returns chronological order (oldest → newest within this batch).
+   */
+  historyForLanguage(
+    language: SupportedLanguage,
+    args: { beforeExclusive?: number; limit: number }
+  ): HistoryRow[] {
+    const limit = Math.min(Math.max(args.limit, 1), 100);
+    const beforeExclusive = args.beforeExclusive ?? 9_007_199_254_740_991; // < 2^53, safe for SQLite binding
+
+    const rows = this.db
+      .prepare(
+        `SELECT id,
+                turn_id AS turnId,
+                speaker_id AS speakerId,
+                speaker_name AS speakerName,
+                source_language AS sourceLanguage,
+                source_text AS sourceText,
+                target_language AS targetLanguage,
+                target_text AS targetText,
+                created_at AS createdAtSec
+         FROM turns
+         WHERE target_language = @language
+           AND id < @beforeExclusive
+         ORDER BY id DESC
+         LIMIT @limit`
+      )
+      .all({
+        language,
+        beforeExclusive,
+        limit
+      }) as Array<{
+      id: number;
+      turnId: string;
+      speakerId: string;
+      speakerName: string;
+      sourceLanguage: SupportedLanguage;
+      sourceText: string;
+      targetLanguage: SupportedLanguage;
+      targetText: string;
+      createdAtSec: number;
+    }>;
+
+    const chronological = [...rows].reverse();
+    return chronological.map((row) => ({
+      id: row.id,
+      turnId: row.turnId,
+      speakerId: row.speakerId,
+      speakerName: row.speakerName.trim() || row.speakerId.slice(0, 8),
+      sourceLanguage: row.sourceLanguage,
+      originalText: row.sourceText,
+      targetLanguage: row.targetLanguage,
+      translatedText: row.targetText,
+      createdAt: row.createdAtSec * 1000
+    }));
   }
 
   insertCorrection(correction: CorrectionRecord) {

@@ -69,6 +69,17 @@ export type AppCopy = {
   statusMicFailed: string;
   statusDebugCopied: string;
   statusDebugCopyFailed: string;
+  menuAria: string;
+  drawerTitle: string;
+  drawerClose: string;
+  pttReady: string;
+  pttRecording: string;
+  pttDisabled: string;
+  loadingHistory: string;
+  loadingOlder: string;
+  showOriginal: string;
+  hideOriginal: string;
+  chatConversation: string;
   onboardingLangLineEn: string;
   onboardingLangLineJa: string;
   onboardingPickEnglish: string;
@@ -153,6 +164,17 @@ const EN: AppCopy = {
   statusMicFailed: "Mic access failed. Check browser microphone permissions.",
   statusDebugCopied: "Debug blob copied to clipboard.",
   statusDebugCopyFailed: "Could not copy debug blob. Retry in Safari app context.",
+  menuAria: "Open settings menu",
+  drawerTitle: "Settings",
+  drawerClose: "Close",
+  pttReady: "Tap to speak — green means you can start",
+  pttRecording: "Tap to stop — recording",
+  pttDisabled: "Connect in the menu before speaking",
+  loadingHistory: "Loading conversation…",
+  loadingOlder: "Loading older messages…",
+  showOriginal: "Show original",
+  hideOriginal: "Hide original",
+  chatConversation: "Conversation",
   onboardingLangLineEn: "Which language would you like for buttons, labels, and prompts?",
   onboardingLangLineJa: "ボタンや説明文に使う言語を選んでください。",
   onboardingPickEnglish: "English",
@@ -242,6 +264,17 @@ const JA: AppCopy = {
   statusMicFailed: "マイクにアクセスできませんでした。ブラウザの許可を確認してください。",
   statusDebugCopied: "デバッグをクリップボードにコピーしました。",
   statusDebugCopyFailed: "コピーに失敗しました。Safariのコンテキストで再試行してください。",
+  menuAria: "設定メニューを開く",
+  drawerTitle: "設定",
+  drawerClose: "閉じる",
+  pttReady: "タップして話す — 緑のときに開始できます",
+  pttRecording: "タップして停止 — 録音中",
+  pttDisabled: "話す前にメニューから接続してください",
+  loadingHistory: "会話を読み込み中…",
+  loadingOlder: "古いメッセージを読み込み中…",
+  showOriginal: "原文を表示",
+  hideOriginal: "原文を隠す",
+  chatConversation: "会話",
   onboardingUnderstandYes: "はい",
   onboardingUnderstandNo: "いいえ",
   onboardingNamePrompt:

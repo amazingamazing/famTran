@@ -402,3 +402,312 @@ button.onboardingPrimary {
   font-size: 0.9rem;
   margin: 0 0 0.75rem;
 }
+
+.coreShell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 0.65rem 0.75rem;
+  box-sizing: border-box;
+}
+
+.coreHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0 0.35rem;
+  flex-shrink: 0;
+}
+
+.coreHeaderMain {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.coreBrand {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8a9bb5;
+}
+
+.coreUserName {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #f3f6fb;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coreHamburger {
+  flex-shrink: 0;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0.45rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #151d29;
+  border: 1px solid #314056;
+}
+
+.coreHamburgerBars {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 1.25rem;
+}
+
+.coreHamburgerBar {
+  display: block;
+  height: 2px;
+  background: #e8eef8;
+  border-radius: 1px;
+}
+
+.coreChatWrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.coreChatScroller {
+  flex: 1;
+  min-height: 52vh;
+  max-height: 75vh;
+  overflow-y: auto;
+  border: 1px solid #232d3c;
+  border-radius: 12px;
+  background: #0a0e14;
+  padding: 0.65rem 0.5rem;
+}
+
+.chatTopSentinel {
+  height: 1px;
+  margin: 0;
+  padding: 0;
+}
+
+.chatLoadBanner {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  color: #8a9bb5;
+  text-align: center;
+}
+
+.chatMessageList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.chatMessage {
+  border-bottom: 1px solid #1c2634;
+  padding-bottom: 0.85rem;
+}
+
+.chatMessage:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.chatMeta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.chatSpeaker {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #b8c9e6;
+}
+
+.chatTime {
+  font-size: 0.72rem;
+  color: #6d7d95;
+}
+
+.chatBubbleMain {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.45;
+  color: #f3f6fb;
+}
+
+.chatOriginalWrap {
+  margin-top: 0.35rem;
+}
+
+.chatToggleOriginal {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.45rem;
+  background: transparent;
+  border: 1px solid #3a4759;
+  color: #9fb0c7;
+}
+
+.chatBubbleOriginal {
+  margin: 0.45rem 0 0;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  color: #c5d0e0;
+  background: #121a24;
+  border-radius: 8px;
+  border: 1px solid #2a3545;
+}
+
+.pttDock {
+  flex-shrink: 0;
+  margin-top: 0.65rem;
+  padding: 1rem 1rem 1.15rem;
+  border-radius: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.pttDockIdle {
+  background: linear-gradient(180deg, #1e4d2e 0%, #15602a 100%);
+  border-color: #2f9d55;
+}
+
+.pttDockRecording {
+  background: linear-gradient(180deg, #6b2323 0%, #8f2020 100%);
+  border-color: #d94a4a;
+}
+
+.pttDockDisabled {
+  background: #2a313c;
+  border-color: #414b5c;
+  cursor: pointer;
+  opacity: 0.92;
+}
+
+.pttMainLabel {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.35;
+}
+
+.pttLiveDraft {
+  margin: 0.55rem 0 0;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.92);
+  max-height: 4.5rem;
+  overflow-y: auto;
+}
+
+.drawerBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  z-index: 80;
+}
+
+.settingsDrawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: min(420px, 92vw);
+  z-index: 90;
+  pointer-events: none;
+}
+
+.settingsDrawerInner {
+  pointer-events: auto;
+  height: 100%;
+  border-radius: 0;
+  border-left: 1px solid #232d3c;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  display: flex;
+  flex-direction: column;
+  padding:                       0.75rem 0.85rem 1rem;
+  box-sizing: border-box;
+}
+
+.drawerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.drawerTitle {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.drawerCloseBtn {
+  flex-shrink: 0;
+}
+
+.drawerScroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 0.2rem;
+}
+
+.drawerNet {
+  margin: 0 0 0.65rem;
+  font-size: 0.9rem;
+}
+
+.drawerNet.ok {
+  color: #7dcea0;
+}
+
+.drawerNet.warn {
+  color: #e0a080;
+}
+
+.drawerToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  align-items: center;
+}
+
+.drawerSection {
+  margin-bottom: 1rem;
+}
+
+.drawerSection h3 {
+  margin-top: 0;
+  font-size: 1rem;
+}
+
+.drawerStatus {
+  font-size: 0.88rem;
+  color: #9fb0c7;
+  margin: 0;
+}

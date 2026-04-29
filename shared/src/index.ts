@@ -23,6 +23,7 @@ export type ServerEvent =
       type: "transcript.chunk";
       turnId: string;
       speakerId: string;
+      speakerDisplayName: string;
       sourceLanguage: SupportedLanguage;
       targetLanguage: SupportedLanguage;
       translatedText: string;
@@ -46,6 +47,7 @@ export type ServerEvent =
       type: "transcript.live";
       turnId: string;
       speakerId: string;
+      speakerDisplayName: string;
       sourceLanguage: SupportedLanguage;
       targetLanguage: SupportedLanguage;
       originalText: string;

@@ -3,6 +3,7 @@ import path from "node:path";
 
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
+import { isSupportedLanguage } from "@family-translation/shared";
 import { WebSocketServer } from "ws";
 import { z } from "zod";
 
@@ -54,6 +55,29 @@ const boot = async () => {
       const payload = schema.parse(request.body as unknown);
       db.upsertGlossary(payload.userId, payload.term, payload.translation, payload.notes);
       return { ok: true };
+    }
+  );
+
+  app.get(
+    "/api/history",
+    async (request, reply) => {
+      const schema = z.object({
+        language: z.string(),
+        beforeId: z.coerce.number().int().positive().optional(),
+        limit: z.coerce.number().int().min(1).max(100).optional().default(40)
+      });
+      const query = schema.parse(request.query as Record<string, unknown>);
+      if (!isSupportedLanguage(query.language)) {
+        return reply.code(400).send({ message: "language must be en or ja" });
+      }
+      const messages = db.historyForLanguage(query.language, {
+        beforeExclusive: query.beforeId,
+        limit: query.limit
+      });
+      return {
+        messages,
+        hasMore: messages.length === query.limit
+      };
     }
   );
 

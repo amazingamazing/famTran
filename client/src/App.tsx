@@ -8,14 +8,26 @@ import { parseEvent } from "./lib/parse-event";
 import {
   getOrCreateGlossaryUserId,
   ONBOARDING_DONE_COOKIE,
-  readControlsExpandedPreference,
-  shouldAutoConnectFromSavedSession,
-  writeControlsExpandedPreference
+  shouldAutoConnectFromSavedSession
 } from "./lib/session-ui";
 
-type TranscriptRow = {
+type HistoryApiMessage = {
+  id: number;
   turnId: string;
   speakerId: string;
+  speakerName: string;
+  sourceLanguage: SupportedLanguage;
+  originalText: string;
+  targetLanguage: SupportedLanguage;
+  translatedText: string;
+  createdAt: number;
+};
+
+type TranscriptRow = {
+  historyId?: number;
+  turnId: string;
+  speakerId: string;
+  speakerDisplayName: string;
   translatedText: string;
   originalText: string;
   targetLanguage: SupportedLanguage;
@@ -33,6 +45,7 @@ type TranscriptRow = {
 type LiveCaptionRow = {
   turnId: string;
   speakerId: string;
+  speakerDisplayName: string;
   translatedText: string;
   originalText: string;
   targetLanguage: SupportedLanguage;
@@ -41,6 +54,59 @@ type LiveCaptionRow = {
 };
 
 type DebugTurnRow = Extract<ServerEvent, { type: "debug.turn" }>;
+
+const mapHistoryToTranscriptRow = (m: HistoryApiMessage): TranscriptRow => ({
+  historyId: m.id,
+  turnId: m.turnId,
+  speakerId: m.speakerId,
+  speakerDisplayName: m.speakerName,
+  translatedText: m.translatedText,
+  originalText: m.originalText,
+  targetLanguage: m.targetLanguage,
+  timestamp: m.createdAt
+});
+
+const messageSortKey = (row: TranscriptRow) => row.timestamp;
+
+function ChatMessageRow({
+  item,
+  showOriginalLabel,
+  hideOriginalLabel,
+  timeLocale
+}: {
+  item: TranscriptRow;
+  showOriginalLabel: string;
+  hideOriginalLabel: string;
+  timeLocale: string;
+}) {
+  const [metaOpen, setMetaOpen] = useState(false);
+  const hasOriginal =
+    item.originalText.trim().length > 0 && item.originalText.trim() !== item.translatedText.trim();
+  return (
+    <li className="chatMessage">
+      <div className="chatMeta">
+        <span className="chatSpeaker">{item.speakerDisplayName}</span>
+        <time className="chatTime" dateTime={new Date(item.timestamp).toISOString()}>
+          {new Date(item.timestamp).toLocaleString(timeLocale)}
+        </time>
+      </div>
+      <p className="chatBubbleMain">{item.translatedText}</p>
+      {hasOriginal ? (
+        <div className="chatOriginalWrap">
+          <button
+            type="button"
+            className="chatToggleOriginal"
+            onClick={() => setMetaOpen((open) => !open)}
+            aria-expanded={metaOpen}
+          >
+            {metaOpen ? hideOriginalLabel : showOriginalLabel}
+          </button>
+          {metaOpen ? <p className="chatBubbleOriginal">{item.originalText}</p> : null}
+        </div>
+      ) : null}
+    </li>
+  );
+}
 
 function AudioUnlockButton({ onClick, label }: { onClick: () => void; label: string }) {
   return (
@@ -62,30 +128,6 @@ function AudioUnlockButton({ onClick, label }: { onClick: () => void; label: str
         <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
       </svg>
     </button>
-  );
-}
-
-function TranscriptItem({ item, sourceTextAria }: { item: TranscriptRow; sourceTextAria: string }) {
-  const [metaOpen, setMetaOpen] = useState(false);
-  return (
-    <li>
-      <div className="transcriptRow">
-        <p className="transcriptMain">{item.translatedText}</p>
-        <button
-          type="button"
-          className={metaOpen ? "transcriptToggle transcriptToggleOpen" : "transcriptToggle"}
-          onClick={() => setMetaOpen((open) => !open)}
-          aria-expanded={metaOpen}
-          aria-label={sourceTextAria}
-        />
-      </div>
-      {metaOpen ? (
-        <div className="transcriptDetailsBody">
-          <p className="transcriptOriginal">{item.originalText}</p>
-          <p className="transcriptTime">{new Date(item.timestamp).toLocaleString()}</p>
-        </div>
-      ) : null}
-    </li>
   );
 }
 
@@ -286,13 +328,14 @@ function App() {
   const [autoPilotRuns, setAutoPilotRuns] = useState(0);
   const [nextAutoDelaySeconds, setNextAutoDelaySeconds] = useState<number | null>(null);
   const [micTestActive, setMicTestActive] = useState(false);
-  const [controlsExpanded, setControlsExpanded] = useState(() =>
-    readControlsExpandedPreference(
-      window.localStorage,
-      !onboardingDoneInit || !getCookie("family_translation_display_name").trim()
-    )
-  );
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [playbackUnlocked, setPlaybackUnlocked] = useState(false);
+  const threadRef = useRef<HTMLDivElement | null>(null);
+  const topSentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadingOlderRef = useRef(false);
 
   const addDebugEvent = (message: string) => {
     const entry = `${new Date().toISOString()} ${message}`;
@@ -465,8 +508,101 @@ function App() {
   }, [providerTts]);
 
   useEffect(() => {
-    writeControlsExpandedPreference(window.localStorage, controlsExpanded);
-  }, [controlsExpanded]);
+    if (!onboardingDone) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setHistoryLoading(true);
+      setTranscripts([]);
+      setHistoryHasMore(false);
+      try {
+        const response = await fetch(`${HTTP_BASE_URL}/api/history?language=${language}&limit=50`);
+        const data = (await response.json()) as { messages?: HistoryApiMessage[]; hasMore?: boolean };
+        if (cancelled) {
+          return;
+        }
+        setTranscripts((data.messages ?? []).map(mapHistoryToTranscriptRow));
+        setHistoryHasMore(data.hasMore === true);
+      } catch {
+        if (!cancelled) {
+          setTranscripts([]);
+          setHistoryHasMore(false);
+        }
+      } finally {
+        if (!cancelled) {
+          setHistoryLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [onboardingDone, language]);
+
+  useEffect(() => {
+    if (historyLoading || !onboardingDone) {
+      return;
+    }
+    const el = threadRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [historyLoading, onboardingDone, language]);
+
+  const loadOlderHistory = async () => {
+    if (!onboardingDone || !historyHasMore || loadingOlderRef.current) {
+      return;
+    }
+    const ids = transcripts.map((row) => row.historyId).filter((id): id is number => id != null);
+    if (ids.length === 0) {
+      return;
+    }
+    const minId = Math.min(...ids);
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    const root = threadRef.current;
+    const prevHeight = root?.scrollHeight ?? 0;
+    try {
+      const response = await fetch(
+        `${HTTP_BASE_URL}/api/history?language=${language}&beforeId=${minId}&limit=40`
+      );
+      const data = (await response.json()) as { messages?: HistoryApiMessage[]; hasMore?: boolean };
+      const older = (data.messages ?? []).map(mapHistoryToTranscriptRow);
+      setTranscripts((previous) => [...older, ...previous]);
+      setHistoryHasMore(data.hasMore === true);
+      requestAnimationFrame(() => {
+        const el = threadRef.current;
+        if (el) {
+          el.scrollTop += el.scrollHeight - prevHeight;
+        }
+      });
+    } finally {
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!onboardingDone) {
+      return;
+    }
+    const root = threadRef.current;
+    const target = topSentinelRef.current;
+    if (!root || !target) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          void loadOlderHistory();
+        }
+      },
+      { root, rootMargin: "120px 0px 0px 0px", threshold: 0 }
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [onboardingDone, historyHasMore, language, transcripts, historyLoading, loadOlderHistory]);
 
   const S = useMemo(() => appStrings(language), [language]);
 
@@ -620,6 +756,7 @@ function App() {
           return {
             turnId: event.turnId,
             speakerId: event.speakerId,
+            speakerDisplayName: event.speakerDisplayName,
             translatedText: event.translatedText,
             originalText: event.originalText,
             targetLanguage: event.targetLanguage,
@@ -635,17 +772,24 @@ function App() {
       if (event.type === "transcript.chunk") {
         setLiveCaption((previous) => (previous?.turnId === event.turnId ? null : previous));
         setTranscripts((previous) => [
+          ...previous,
           {
             turnId: event.turnId,
             speakerId: event.speakerId,
+            speakerDisplayName: event.speakerDisplayName,
             translatedText: event.translatedText,
             originalText: event.originalText,
             targetLanguage: event.targetLanguage,
             timestamp: event.timestamp,
             debug: event.debug
-          },
-          ...previous
+          }
         ]);
+        requestAnimationFrame(() => {
+          const el = threadRef.current;
+          if (el) {
+            el.scrollTop = el.scrollHeight;
+          }
+        });
         addDebugEvent(
           `transcript.chunk turn=${event.turnId} final=${event.isFinal} stt=${event.debug?.transcriptionPath ?? "n/a"} tx=${event.debug?.translationPath ?? "n/a"} tts=${event.debug?.ttsPath ?? "n/a"}`
         );
@@ -836,6 +980,14 @@ function App() {
     }
   };
 
+  const togglePtt = async () => {
+    if (micTestActive) {
+      await stopMicTest();
+    } else {
+      await startMicTest();
+    }
+  };
+
   const submitTurn = () => {
     const sent = sendTurn(textInput, "manual");
     if (sent) {
@@ -848,12 +1000,13 @@ function App() {
       return;
     }
     const glossaryUserId = getOrCreateGlossaryUserId(getCookie, setCookie);
+    const termSaved = manualTerm.trim();
     const response = await fetch(`${HTTP_BASE_URL}/api/glossary`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         userId: glossaryUserId,
-        term: manualTerm.trim(),
+        term: termSaved,
         translation: manualTranslation.trim(),
         notes: manualNotes.trim()
       })
@@ -863,7 +1016,7 @@ function App() {
       setManualTranslation("");
       setManualNotes("");
       setStatusMessage(S.statusGlossarySaved);
-      addDebugEvent(`glossary.saved term=${manualTerm.trim()}`);
+      addDebugEvent(`glossary.saved term=${termSaved}`);
     }
   };
 
@@ -972,10 +1125,12 @@ function App() {
     }
   };
 
-  const sortedTranscripts = useMemo(
-    () => [...transcripts].sort((a, b) => b.timestamp - a.timestamp),
+  const orderedMessages = useMemo(
+    () => [...transcripts].sort((a, b) => messageSortKey(a) - messageSortKey(b)),
     [transcripts]
   );
+
+  const timeLocale = language === "ja" ? "ja-JP" : "en-US";
 
   if (!onboardingDone) {
     const lineEn = appStrings("en").onboardingLangLineEn;
@@ -1085,224 +1240,267 @@ function App() {
   }
 
   return (
-    <main className="layout">
-      <header className="panel">
-        <h1 className="pageTitle">{S.pageTitle}</h1>
-        <div className="headerRow headerToolbar">
-          <div className="actions">
-            <button type="button" onClick={() => setControlsExpanded((previous) => !previous)}>
-              {controlsExpanded ? S.compactView : S.showControls}
-            </button>
-            <button type="button" onClick={copyDebugBlob}>
-              {S.copyDebugBlob}
-            </button>
-            {!playbackUnlocked ? (
-              <AudioUnlockButton onClick={() => void unlockPlaybackAudio()} label={S.enableAudioPlayback} />
-            ) : null}
-          </div>
-          <p className={`headerNet ${networkOnline ? "ok" : "warn"}`}>
-            {networkOnline ? S.online : S.offline}
-          </p>
+    <main className="coreShell">
+      <header className="coreHeader">
+        <div className="coreHeaderMain">
+          <span className="coreBrand">Family Translation</span>
+          <span className="coreUserName">{displayName.trim() || "—"}</span>
         </div>
+        <button
+          type="button"
+          className="coreHamburger"
+          onClick={() => setMenuOpen(true)}
+          aria-label={S.menuAria}
+        >
+          <span className="coreHamburgerBars" aria-hidden>
+            <span className="coreHamburgerBar" />
+            <span className="coreHamburgerBar" />
+            <span className="coreHamburgerBar" />
+          </span>
+        </button>
       </header>
 
-      {controlsExpanded ? (
-        <section className="panel grid2">
-          <label>
-            {S.displayNameLabel}
-            <input
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-              placeholder={S.displayNamePlaceholder}
-            />
-          </label>
-          <label>
-            {S.languageLabel}
-            <select value={language} onChange={(event) => setLanguage(event.target.value as SupportedLanguage)}>
-              <option value="en">{S.langEnglish}</option>
-              <option value="ja">{S.langJapanese}</option>
-            </select>
-          </label>
-          <label>
-            {S.hearTtsLabel}
-            <input type="checkbox" checked={hearAudio} onChange={(event) => setHearAudio(event.target.checked)} />
-          </label>
-          <label className="full">
-            {S.contextNotesLabel}
-            <textarea value={contextNotes} onChange={(event) => setContextNotes(event.target.value)} rows={2} />
-          </label>
-          <div className="actions">
-            <button onClick={connect} disabled={connected}>
-              {S.connect}
-            </button>
-            <button onClick={disconnect}>{S.disconnect}</button>
-          </div>
-          <p className="full">{statusMessage}</p>
-        </section>
-      ) : (
-        <section className="panel compactSessionPanel">
-          <h2 className="roomInfoHeading">{S.sessionHeading}</h2>
-          <div className="compactInfoGrid">
-            <div className="compactInfoCell">
-              <span className="compactInfoLabel">{S.compactName}</span>
-              <span className="compactInfoValue">{displayName.trim() || "—"}</span>
-            </div>
-            <div className="compactInfoCell">
-              <span className="compactInfoLabel">{S.compactLanguage}</span>
-              <span className="compactInfoValue">{language.toUpperCase()}</span>
-            </div>
-            <div className="compactInfoCell">
-              <span className="compactInfoLabel">{S.compactTts}</span>
-              <span className="compactInfoValue">{hearAudio ? S.ttsOn : S.ttsOff}</span>
-            </div>
-          </div>
-          <div className="actions">
-            <button onClick={connect} disabled={connected}>
-              {S.connect}
-            </button>
-            <button onClick={disconnect}>{S.disconnect}</button>
-          </div>
-          <p>{statusMessage}</p>
-        </section>
-      )}
-
-      <section className="panel">
-        <h2>{S.liveSpeechHeading}</h2>
-        <div className="actions">
-          <input
-            value={textInput}
-            onChange={(event) => setTextInput(event.target.value)}
-            placeholder={S.saySomethingPlaceholder}
-            className="grow"
-          />
-          <button onClick={submitTurn} disabled={!connected || !textInput.trim()}>
-            {S.sendUtterance}
-          </button>
-          <button onClick={toggleAutoPilot} disabled={!connected}>
-            {autoPilotEnabled ? S.stopSimulator : S.startSimulator}
-          </button>
-          {!micTestActive ? (
-            <button onClick={() => void startMicTest()} disabled={!connected}>
-              {S.startMicTest}
-            </button>
-          ) : (
-            <button onClick={() => void stopMicTest()}>{S.stopMicTest}</button>
-          )}
+      <section className="coreChatWrap" aria-label={S.chatConversation}>
+        <div className="coreChatScroller" ref={threadRef}>
+          <div ref={topSentinelRef} className="chatTopSentinel" aria-hidden />
+          {loadingOlder ? <p className="chatLoadBanner">{S.loadingOlder}</p> : null}
+          {historyLoading ? <p className="chatLoadBanner">{S.loadingHistory}</p> : null}
+          <ul className="chatMessageList">
+            {orderedMessages.map((item) => (
+              <ChatMessageRow
+                key={item.historyId != null ? `h-${item.historyId}` : `ws-${item.turnId}-${item.timestamp}`}
+                item={item}
+                showOriginalLabel={S.showOriginal}
+                hideOriginalLabel={S.hideOriginal}
+                timeLocale={timeLocale}
+              />
+            ))}
+          </ul>
         </div>
-        <p className="liveMetaLine">
-          {S.messagesSent}: {autoPilotRuns}
-        </p>
-        <p className="liveMetaLine">
-          {S.micTestStateLabel}: {micTestActive ? S.micTestCapturing : S.micTestIdle}
-        </p>
       </section>
 
-      {controlsExpanded ? (
-        <>
-          <section className="panel grid2">
-            <div>
-              <h2>{S.glossaryHeading}</h2>
-              <label>
-                {S.termLabel}
-                <input value={manualTerm} onChange={(event) => setManualTerm(event.target.value)} />
-              </label>
-              <label>
-                {S.translationLabel}
-                <input value={manualTranslation} onChange={(event) => setManualTranslation(event.target.value)} />
-              </label>
-              <label>
-                {S.notesLabel}
-                <input value={manualNotes} onChange={(event) => setManualNotes(event.target.value)} />
-              </label>
-              <button onClick={saveGlossary} disabled={!manualTerm.trim() || !manualTranslation.trim()}>
-                {S.saveGlossary}
-              </button>
-            </div>
-            <div>
-              <h2>{S.correctionHeading}</h2>
-              <label>
-                {S.wrongOutputLabel}
-                <input value={correctionWrong} onChange={(event) => setCorrectionWrong(event.target.value)} />
-              </label>
-              <label>
-                {S.correctOutputLabel}
-                <input value={correctionRight} onChange={(event) => setCorrectionRight(event.target.value)} />
-              </label>
-              <label>
-                {S.contextLabel}
-                <input value={correctionContext} onChange={(event) => setCorrectionContext(event.target.value)} />
-              </label>
-              <button onClick={submitCorrection} disabled={!connected}>
-                {S.submitCorrection}
-              </button>
-            </div>
-          </section>
+      <div
+        className={`pttDock ${!connected ? "pttDockDisabled" : ""} ${micTestActive ? "pttDockRecording" : "pttDockIdle"}`}
+        role="button"
+        tabIndex={connected ? 0 : -1}
+        onClick={() => {
+          if (!connected) {
+            setMenuOpen(true);
+            return;
+          }
+          void togglePtt();
+        }}
+        onKeyDown={(event) => {
+          if (!connected) {
+            return;
+          }
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            void togglePtt();
+          }
+        }}
+      >
+        <p className="pttMainLabel">
+          {!connected ? S.pttDisabled : micTestActive ? S.pttRecording : S.pttReady}
+        </p>
+        {liveCaption && micTestActive ? (
+          <p className="pttLiveDraft" aria-live="polite">
+            {liveCaption.translatedText}
+          </p>
+        ) : null}
+      </div>
 
-          <section className="panel grid3">
-            <h2 className="full">{S.providerHeading}</h2>
-            <label>
-              {S.sttLabel}
-              <select value={providerStt} onChange={(event) => setProviderStt(event.target.value as ProviderType)}>
-                <option value="deepgram">Deepgram</option>
-                <option value="openai">OpenAI</option>
-              </select>
-            </label>
-            <label>
-              {S.translationProviderLabel}
-              <select
-                value={providerTranslation}
-                onChange={(event) => setProviderTranslation(event.target.value as ProviderType)}
-              >
-                <option value="gemini">Gemini</option>
-                <option value="openai">OpenAI</option>
-              </select>
-            </label>
-            <label>
-              {S.ttsProviderLabel}
-              <select value={providerTts} onChange={(event) => setProviderTts(event.target.value as ProviderType)}>
-                <option value="cartesia">Cartesia</option>
-                <option value="openai">OpenAI</option>
-              </select>
-            </label>
-            <div className="actions full">
-              <button onClick={saveProviders} disabled={!connected}>
-                {S.applyProviders}
-              </button>
-            </div>
-          </section>
-        </>
+      {menuOpen ? (
+        <button
+          type="button"
+          className="drawerBackdrop"
+          aria-label={S.drawerClose}
+          onClick={() => setMenuOpen(false)}
+        />
       ) : null}
 
-      <section className="panel">
-        <div className="transcriptPanelHead">
-          <h2>{S.transcriptHeading}</h2>
-          {!playbackUnlocked ? <AudioUnlockButton onClick={() => void unlockPlaybackAudio()} label={S.enableAudioPlayback} /> : null}
-        </div>
-        {liveCaption ? (
-          <div className="transcriptLive" aria-live="polite">
-            <p className="transcriptLiveBadge">{S.yourSpeechLive}</p>
-            <p className="transcriptLiveMain">{liveCaption.translatedText}</p>
-            {liveCaption.translatedText.trim() === liveCaption.originalText.trim() ? null : (
-              <p className="transcriptLiveSub">{liveCaption.originalText}</p>
-            )}
-          </div>
-        ) : null}
-        <ul className="transcriptList">
-          {sortedTranscripts.map((item) => (
-            <TranscriptItem key={`${item.turnId}-${item.timestamp}`} item={item} sourceTextAria={S.sourceTextAria} />
-          ))}
-        </ul>
-      </section>
+      {menuOpen ? (
+        <aside className="settingsDrawer">
+          <div className="settingsDrawerInner panel">
+            <div className="drawerHeader">
+              <h2 className="drawerTitle">{S.drawerTitle}</h2>
+              <button type="button" className="drawerCloseBtn" onClick={() => setMenuOpen(false)}>
+                {S.drawerClose}
+              </button>
+            </div>
+            <div className="drawerScroll">
+              <p className={`drawerNet ${networkOnline ? "ok" : "warn"}`}>
+                {networkOnline ? S.online : S.offline}
+              </p>
+              <div className="drawerToolbar">
+                <button type="button" onClick={copyDebugBlob}>
+                  {S.copyDebugBlob}
+                </button>
+                {!playbackUnlocked ? (
+                  <AudioUnlockButton onClick={() => void unlockPlaybackAudio()} label={S.enableAudioPlayback} />
+                ) : null}
+              </div>
 
-      {controlsExpanded ? (
-        <section className="panel">
-          <h2>{S.iphoneChecklistHeading}</h2>
-          <ul>
-            <li>{S.iphoneChecklist1}</li>
-            <li>{S.iphoneChecklist2}</li>
-            <li>{S.iphoneChecklist3}</li>
-          </ul>
-        </section>
+              <div className="drawerSection grid2">
+                <label>
+                  {S.displayNameLabel}
+                  <input
+                    value={displayName}
+                    onChange={(event) => setDisplayName(event.target.value)}
+                    placeholder={S.displayNamePlaceholder}
+                  />
+                </label>
+                <label>
+                  {S.languageLabel}
+                  <select
+                    value={language}
+                    onChange={(event) => setLanguage(event.target.value as SupportedLanguage)}
+                  >
+                    <option value="en">{S.langEnglish}</option>
+                    <option value="ja">{S.langJapanese}</option>
+                  </select>
+                </label>
+                <label>
+                  {S.hearTtsLabel}
+                  <input
+                    type="checkbox"
+                    checked={hearAudio}
+                    onChange={(event) => setHearAudio(event.target.checked)}
+                  />
+                </label>
+                <label className="full">
+                  {S.contextNotesLabel}
+                  <textarea
+                    value={contextNotes}
+                    onChange={(event) => setContextNotes(event.target.value)}
+                    rows={2}
+                  />
+                </label>
+                <div className="actions full">
+                  <button type="button" onClick={connect} disabled={connected}>
+                    {S.connect}
+                  </button>
+                  <button type="button" onClick={disconnect}>
+                    {S.disconnect}
+                  </button>
+                </div>
+                <p className="full drawerStatus">{statusMessage}</p>
+              </div>
+
+              <section className="drawerSection">
+                <h3>{S.liveSpeechHeading}</h3>
+                <div className="actions">
+                  <input
+                    value={textInput}
+                    onChange={(event) => setTextInput(event.target.value)}
+                    placeholder={S.saySomethingPlaceholder}
+                    className="grow"
+                  />
+                  <button type="button" onClick={submitTurn} disabled={!connected || !textInput.trim()}>
+                    {S.sendUtterance}
+                  </button>
+                  <button type="button" onClick={toggleAutoPilot} disabled={!connected}>
+                    {autoPilotEnabled ? S.stopSimulator : S.startSimulator}
+                  </button>
+                </div>
+                <p className="liveMetaLine">
+                  {S.messagesSent}: {autoPilotRuns}
+                </p>
+              </section>
+
+              <section className="drawerSection grid2">
+                <div>
+                  <h3>{S.glossaryHeading}</h3>
+                  <label>
+                    {S.termLabel}
+                    <input value={manualTerm} onChange={(event) => setManualTerm(event.target.value)} />
+                  </label>
+                  <label>
+                    {S.translationLabel}
+                    <input
+                      value={manualTranslation}
+                      onChange={(event) => setManualTranslation(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    {S.notesLabel}
+                    <input value={manualNotes} onChange={(event) => setManualNotes(event.target.value)} />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={saveGlossary}
+                    disabled={!manualTerm.trim() || !manualTranslation.trim()}
+                  >
+                    {S.saveGlossary}
+                  </button>
+                </div>
+                <div>
+                  <h3>{S.correctionHeading}</h3>
+                  <label>
+                    {S.wrongOutputLabel}
+                    <input value={correctionWrong} onChange={(event) => setCorrectionWrong(event.target.value)} />
+                  </label>
+                  <label>
+                    {S.correctOutputLabel}
+                    <input value={correctionRight} onChange={(event) => setCorrectionRight(event.target.value)} />
+                  </label>
+                  <label>
+                    {S.contextLabel}
+                    <input
+                      value={correctionContext}
+                      onChange={(event) => setCorrectionContext(event.target.value)}
+                    />
+                  </label>
+                  <button type="button" onClick={submitCorrection} disabled={!connected}>
+                    {S.submitCorrection}
+                  </button>
+                </div>
+              </section>
+
+              <section className="drawerSection grid3">
+                <h3 className="full">{S.providerHeading}</h3>
+                <label>
+                  {S.sttLabel}
+                  <select value={providerStt} onChange={(event) => setProviderStt(event.target.value as ProviderType)}>
+                    <option value="deepgram">Deepgram</option>
+                    <option value="openai">OpenAI</option>
+                  </select>
+                </label>
+                <label>
+                  {S.translationProviderLabel}
+                  <select
+                    value={providerTranslation}
+                    onChange={(event) => setProviderTranslation(event.target.value as ProviderType)}
+                  >
+                    <option value="gemini">Gemini</option>
+                    <option value="openai">OpenAI</option>
+                  </select>
+                </label>
+                <label>
+                  {S.ttsProviderLabel}
+                  <select value={providerTts} onChange={(event) => setProviderTts(event.target.value as ProviderType)}>
+                    <option value="cartesia">Cartesia</option>
+                    <option value="openai">OpenAI</option>
+                  </select>
+                </label>
+                <div className="actions full">
+                  <button type="button" onClick={saveProviders} disabled={!connected}>
+                    {S.applyProviders}
+                  </button>
+                </div>
+              </section>
+
+              <section className="drawerSection">
+                <h3>{S.iphoneChecklistHeading}</h3>
+                <ul>
+                  <li>{S.iphoneChecklist1}</li>
+                  <li>{S.iphoneChecklist2}</li>
+                  <li>{S.iphoneChecklist3}</li>
+                </ul>
+              </section>
+            </div>
+          </div>
+        </aside>
       ) : null}
     </main>
   );
