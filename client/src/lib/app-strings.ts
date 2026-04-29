@@ -69,6 +69,10 @@ export type AppCopy = {
   statusMicFailed: string;
   statusDebugCopied: string;
   statusDebugCopyFailed: string;
+  reconnect: string;
+  micWarmupTitle: string;
+  micWarmupBody: string;
+  micWarmupAction: string;
   menuAria: string;
   drawerTitle: string;
   drawerClose: string;
@@ -164,6 +168,10 @@ const EN: AppCopy = {
   statusMicFailed: "Mic access failed. Check browser microphone permissions.",
   statusDebugCopied: "Debug blob copied to clipboard.",
   statusDebugCopyFailed: "Could not copy debug blob. Retry in Safari app context.",
+  reconnect: "Reconnect",
+  micWarmupTitle: "Enable microphone and audio",
+  micWarmupBody: "Please allow microphone and playback now so talking works immediately.",
+  micWarmupAction: "Enable now",
   menuAria: "Open settings menu",
   drawerTitle: "Settings",
   drawerClose: "Close",
@@ -183,7 +191,7 @@ const EN: AppCopy = {
   onboardingUnderstandPromptFromJa: "英語はわかりますか？",
   onboardingUnderstandYes: "Yes",
   onboardingUnderstandNo: "No",
-  onboardingNamePrompt: "What name should your family see for you? We’ll add it to the shared glossary so translators keep the spelling steady.",
+  onboardingNamePrompt: "What is your name?",
   onboardingNamePlaceholder: "e.g. Kosono",
   onboardingContinue: "Continue",
   onboardingBack: "Back",
@@ -262,6 +270,10 @@ const JA: AppCopy = {
   statusMicFailed: "マイクにアクセスできませんでした。ブラウザの許可を確認してください。",
   statusDebugCopied: "デバッグをクリップボードにコピーしました。",
   statusDebugCopyFailed: "コピーに失敗しました。Safariのコンテキストで再試行してください。",
+  reconnect: "再接続",
+  micWarmupTitle: "マイクと音声を有効にする",
+  micWarmupBody: "会話をすぐ始められるよう、先にマイクと再生を許可してください。",
+  micWarmupAction: "今すぐ有効化",
   menuAria: "設定メニューを開く",
   drawerTitle: "設定",
   drawerClose: "閉じる",
@@ -275,8 +287,7 @@ const JA: AppCopy = {
   chatConversation: "会話",
   onboardingUnderstandYes: "はい",
   onboardingUnderstandNo: "いいえ",
-  onboardingNamePrompt:
-    "家族に見せるあなたの名前は？ 共有用語集に追加し、表記がブレないようにします。",
+  onboardingNamePrompt: "あなたの名前は何ですか？",
   onboardingNamePlaceholder: "例：コソノ",
   onboardingContinue: "続ける",
   onboardingBack: "戻る",

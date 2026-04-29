@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ProviderType, ServerEvent, SupportedLanguage } from "@family-translation/shared";
 
 import "./App.css";
@@ -142,6 +142,7 @@ const HTTP_BASE_URL =
     : `${window.location.protocol}//${window.location.host}`;
 
 const createTurnId = () => `turn-${crypto.randomUUID()}`;
+const MIC_WARMUP_DONE_COOKIE = "family_translation_mic_warmup_done";
 
 const encodeStringAsBase64 = (value: string) => btoa(unescape(encodeURIComponent(value)));
 const AUTOPILOT_MIN_MS = 15_000;
@@ -333,6 +334,7 @@ function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [playbackUnlocked, setPlaybackUnlocked] = useState(false);
+  const [permissionReady, setPermissionReady] = useState(() => getCookie(MIC_WARMUP_DONE_COOKIE) === "true");
   const threadRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const loadingOlderRef = useRef(false);
@@ -550,7 +552,7 @@ function App() {
     }
   }, [historyLoading, onboardingDone, language]);
 
-  const loadOlderHistory = async () => {
+  const loadOlderHistory = useCallback(async () => {
     if (!onboardingDone || !historyHasMore || loadingOlderRef.current) {
       return;
     }
@@ -581,7 +583,7 @@ function App() {
       loadingOlderRef.current = false;
       setLoadingOlder(false);
     }
-  };
+  }, [historyHasMore, language, onboardingDone, transcripts]);
 
   useEffect(() => {
     if (!onboardingDone) {
@@ -605,6 +607,33 @@ function App() {
   }, [onboardingDone, historyHasMore, language, transcripts, historyLoading, loadOlderHistory]);
 
   const S = useMemo(() => appStrings(language), [language]);
+
+  const runPermissionWarmup = useCallback(async () => {
+    try {
+      await unlockPlaybackAudio();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1
+        }
+      });
+      stream.getTracks().forEach((track) => track.stop());
+      setCookie(MIC_WARMUP_DONE_COOKIE, "true");
+      setPermissionReady(true);
+      addDebugEvent("permissions.warmup.ok");
+    } catch {
+      addDebugEvent("permissions.warmup.failed");
+    }
+  }, [unlockPlaybackAudio]);
+
+  useEffect(() => {
+    if (!onboardingDone || permissionReady) {
+      return;
+    }
+    const id = window.setTimeout(() => {
+      void runPermissionWarmup();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [onboardingDone, permissionReady, runPermissionWarmup]);
 
   const completeOnboardingWithName = async () => {
     const name = onboardingNameDraft.trim();
@@ -1241,6 +1270,15 @@ function App() {
   return (
     <main className="coreShell">
       <header className="coreHeader">
+        <div className="coreStatusWrap">
+          {connected ? (
+            <span className="coreStatusOnline">{S.online}</span>
+          ) : (
+            <button type="button" className="coreStatusReconnect" onClick={connect}>
+              {S.reconnect}
+            </button>
+          )}
+        </div>
         <div className="coreHeaderMain">
           <span className="coreBrand">Family Translation</span>
           <span className="coreUserName">{displayName.trim() || "—"}</span>
@@ -1260,6 +1298,15 @@ function App() {
       </header>
 
       <section className="coreChatWrap" aria-label={S.chatConversation}>
+        {!permissionReady ? (
+          <div className="permissionPrompt">
+            <p className="permissionPromptTitle">{S.micWarmupTitle}</p>
+            <p className="permissionPromptBody">{S.micWarmupBody}</p>
+            <button type="button" onClick={() => void runPermissionWarmup()}>
+              {S.micWarmupAction}
+            </button>
+          </div>
+        ) : null}
         <div className="coreChatScroller" ref={threadRef}>
           <div ref={topSentinelRef} className="chatTopSentinel" aria-hidden />
           {loadingOlder ? <p className="chatLoadBanner">{S.loadingOlder}</p> : null}
