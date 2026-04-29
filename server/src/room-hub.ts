@@ -185,9 +185,75 @@ export class RoomHub {
         this.broadcastToAll({ type: "providers.updated", ...selected });
         return;
       }
+      case "turn.edit":
+        await this.handleTurnEdit(clientId, event.turnId, event.sourceText);
+        return;
       case "session.join":
         // Join is handled by ws bootstrap to create client ids.
         return;
+    }
+  }
+
+  private async handleTurnEdit(editorClientId: string, turnId: string, sourceTextRaw: string) {
+    const sourceText = sourceTextRaw.trim();
+    if (!sourceText) {
+      return;
+    }
+    const seed = this.db.getTurnForEdit(turnId);
+    if (!seed || seed.speakerId !== editorClientId) {
+      return;
+    }
+
+    const glossaryLines = this.db
+      .listGlossary()
+      .map((entry) => `${entry.term} -> ${entry.translation} (${entry.notes})`);
+    const correctionLines = this.db
+      .latestCorrections()
+      .map((entry) => `${entry.wrongText} => ${entry.rightText} (${entry.context})`);
+    const recentTurns = this.db.latestTurns();
+    const translateContext = { glossaryLines, correctionLines, recentTurns };
+
+    const translatedByLang = new Map<SupportedLanguage, string>();
+    for (const lang of seed.targetLanguages) {
+      if (lang === seed.sourceLanguage) {
+        translatedByLang.set(lang, sourceText);
+      } else {
+        const result = await this.providers.translateText({
+          sourceText,
+          sourceLanguage: seed.sourceLanguage,
+          targetLanguage: lang,
+          context: translateContext
+        });
+        translatedByLang.set(lang, result.value);
+      }
+    }
+
+    const editedAtSec = Math.floor(Date.now() / 1000);
+    for (const lang of seed.targetLanguages) {
+      const translated = translatedByLang.get(lang) ?? sourceText;
+      this.db.updateTurnEditedTranslation({
+        turnId,
+        targetLanguage: lang,
+        sourceText,
+        targetText: translated,
+        editedAtSec
+      });
+    }
+
+    for (const participant of this.participants.values()) {
+      const translatedText = translatedByLang.get(participant.language) ?? sourceText;
+      this.send(participant.socket, {
+        type: "transcript.edited",
+        turnId,
+        speakerId: seed.speakerId,
+        speakerDisplayName: seed.speakerName,
+        sourceLanguage: seed.sourceLanguage,
+        targetLanguage: participant.language,
+        originalText: sourceText,
+        translatedText,
+        timestamp: Date.now(),
+        editedAt: editedAtSec * 1000
+      });
     }
   }
 

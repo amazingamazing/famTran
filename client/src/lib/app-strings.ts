@@ -84,6 +84,11 @@ export type AppCopy = {
   showOriginal: string;
   hideOriginal: string;
   chatConversation: string;
+  editMessage: string;
+  saveEdit: string;
+  cancelEdit: string;
+  editedMessage: string;
+  unseenEditsAbove: string;
   onboardingLangLineEn: string;
   onboardingLangLineJa: string;
   onboardingPickEnglish: string;
@@ -183,6 +188,11 @@ const EN: AppCopy = {
   showOriginal: "Show original",
   hideOriginal: "Hide original",
   chatConversation: "Conversation",
+  editMessage: "Edit message",
+  saveEdit: "Save",
+  cancelEdit: "Cancel",
+  editedMessage: "Edited",
+  unseenEditsAbove: "Updated message above — tap to dismiss",
   onboardingLangLineEn: "What is your preferred language?",
   onboardingLangLineJa: "ご希望の言語は何ですか？",
   onboardingPickEnglish: "English",
@@ -285,6 +295,11 @@ const JA: AppCopy = {
   showOriginal: "原文を表示",
   hideOriginal: "原文を隠す",
   chatConversation: "会話",
+  editMessage: "メッセージを編集",
+  saveEdit: "保存",
+  cancelEdit: "キャンセル",
+  editedMessage: "編集済み",
+  unseenEditsAbove: "上に更新されたメッセージがあります — タップで閉じる",
   onboardingUnderstandYes: "はい",
   onboardingUnderstandNo: "いいえ",
   onboardingNamePrompt: "あなたの名前は何ですか？",

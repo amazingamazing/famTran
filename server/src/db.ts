@@ -33,9 +33,10 @@ export type HistoryRow = {
   targetLanguage: SupportedLanguage;
   translatedText: string;
   createdAt: number;
+  editedAt?: number;
 };
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export class AppDb {
   private readonly db: Database.Database;
@@ -76,7 +77,8 @@ export class AppDb {
           source_text TEXT NOT NULL,
           target_language TEXT NOT NULL,
           target_text TEXT NOT NULL,
-          created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+          created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+          edited_at INTEGER
         );
 
         CREATE TABLE corrections (
@@ -91,6 +93,10 @@ export class AppDb {
       userVersion = SCHEMA_VERSION;
     } else if (userVersion === 2) {
       this.db.exec(`ALTER TABLE turns ADD COLUMN speaker_name TEXT NOT NULL DEFAULT ''`);
+      this.db.exec(`ALTER TABLE turns ADD COLUMN edited_at INTEGER`);
+      userVersion = SCHEMA_VERSION;
+    } else if (userVersion === 3) {
+      this.db.exec(`ALTER TABLE turns ADD COLUMN edited_at INTEGER`);
       userVersion = SCHEMA_VERSION;
     }
 
@@ -98,6 +104,55 @@ export class AppDb {
       throw new Error(`Unexpected SQLite user_version ${userVersion}; expected ${SCHEMA_VERSION}`);
     }
     this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  }
+
+  getTurnForEdit(
+    turnId: string
+  ): { turnId: string; speakerId: string; speakerName: string; sourceLanguage: SupportedLanguage; targetLanguages: SupportedLanguage[] } | null {
+    const rows = this.db
+      .prepare(
+        `SELECT turn_id AS turnId, speaker_id AS speakerId, speaker_name AS speakerName,
+                source_language AS sourceLanguage, target_language AS targetLanguage
+         FROM turns
+         WHERE turn_id = @turnId`
+      )
+      .all({ turnId }) as Array<{
+      turnId: string;
+      speakerId: string;
+      speakerName: string;
+      sourceLanguage: SupportedLanguage;
+      targetLanguage: SupportedLanguage;
+    }>;
+    if (rows.length === 0) {
+      return null;
+    }
+    const first = rows[0];
+    return {
+      turnId: first.turnId,
+      speakerId: first.speakerId,
+      speakerName: first.speakerName,
+      sourceLanguage: first.sourceLanguage,
+      targetLanguages: [...new Set(rows.map((row) => row.targetLanguage))]
+    };
+  }
+
+  updateTurnEditedTranslation(args: {
+    turnId: string;
+    targetLanguage: SupportedLanguage;
+    sourceText: string;
+    targetText: string;
+    editedAtSec: number;
+  }) {
+    this.db
+      .prepare(
+        `UPDATE turns
+         SET source_text = @sourceText,
+             target_text = @targetText,
+             edited_at = @editedAtSec
+         WHERE turn_id = @turnId
+           AND target_language = @targetLanguage`
+      )
+      .run(args);
   }
 
   upsertGlossary(userId: string, term: string, translation: string, notes: string) {
@@ -165,7 +220,8 @@ export class AppDb {
                 source_text AS sourceText,
                 target_language AS targetLanguage,
                 target_text AS targetText,
-                created_at AS createdAtSec
+                created_at AS createdAtSec,
+                edited_at AS editedAtSec
          FROM turns
          WHERE target_language = @language
            AND id < @beforeExclusive
@@ -186,6 +242,7 @@ export class AppDb {
       targetLanguage: SupportedLanguage;
       targetText: string;
       createdAtSec: number;
+      editedAtSec?: number | null;
     }>;
 
     const chronological = [...rows].reverse();
@@ -198,7 +255,8 @@ export class AppDb {
       originalText: row.sourceText,
       targetLanguage: row.targetLanguage,
       translatedText: row.targetText,
-      createdAt: row.createdAtSec * 1000
+      createdAt: row.createdAtSec * 1000,
+      editedAt: row.editedAtSec ? row.editedAtSec * 1000 : undefined
     }));
   }
 

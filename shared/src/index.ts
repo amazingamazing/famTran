@@ -56,6 +56,18 @@ export type ServerEvent =
       timestamp: number;
     }
   | {
+      type: "transcript.edited";
+      turnId: string;
+      speakerId: string;
+      speakerDisplayName: string;
+      sourceLanguage: SupportedLanguage;
+      targetLanguage: SupportedLanguage;
+      originalText: string;
+      translatedText: string;
+      timestamp: number;
+      editedAt: number;
+    }
+  | {
       type: "audio.chunk";
       turnId: string;
       targetLanguage: SupportedLanguage;
@@ -138,6 +150,11 @@ export type ClientEvent =
       stt: ProviderType;
       translation: ProviderType;
       tts: ProviderType;
+    }
+  | {
+      type: "turn.edit";
+      turnId: string;
+      sourceText: string;
     };
 
 export const isSupportedLanguage = (value: string): value is SupportedLanguage =>

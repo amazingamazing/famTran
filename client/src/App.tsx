@@ -21,6 +21,7 @@ type HistoryApiMessage = {
   targetLanguage: SupportedLanguage;
   translatedText: string;
   createdAt: number;
+  editedAt?: number;
 };
 
 type TranscriptRow = {
@@ -32,6 +33,7 @@ type TranscriptRow = {
   originalText: string;
   targetLanguage: SupportedLanguage;
   timestamp: number;
+  editedAt?: number;
   debug?: {
     transcriptionPath: string;
     transcriptionDetail?: string;
@@ -63,7 +65,8 @@ const mapHistoryToTranscriptRow = (m: HistoryApiMessage): TranscriptRow => ({
   translatedText: m.translatedText,
   originalText: m.originalText,
   targetLanguage: m.targetLanguage,
-  timestamp: m.createdAt
+  timestamp: m.createdAt,
+  editedAt: m.editedAt
 });
 
 const messageSortKey = (row: TranscriptRow) => row.timestamp;
@@ -72,21 +75,37 @@ function ChatMessageRow({
   item,
   showOriginalLabel,
   hideOriginalLabel,
-  timeLocale
+  timeLocale,
+  canEdit,
+  onSubmitEdit,
+  editMessageLabel,
+  saveEditLabel,
+  cancelEditLabel,
+  editedLabel
 }: {
   item: TranscriptRow;
   showOriginalLabel: string;
   hideOriginalLabel: string;
   timeLocale: string;
+  canEdit: boolean;
+  onSubmitEdit: (turnId: string, sourceText: string) => void;
+  editMessageLabel: string;
+  saveEditLabel: string;
+  cancelEditLabel: string;
+  editedLabel: string;
 }) {
   const [metaOpen, setMetaOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [draft, setDraft] = useState(item.originalText);
   const hasOriginal =
     item.originalText.trim().length > 0 && item.originalText.trim() !== item.translatedText.trim();
+  const isEdited = item.editedAt != null;
   return (
-    <li className="chatMessage">
+    <li className={`chatMessage ${isEdited ? "chatMessageEdited" : ""}`} data-turn-id={item.turnId}>
       <div className="chatMeta">
         <div className="chatMetaLeft">
           <span className="chatSpeaker">{item.speakerDisplayName}</span>
+          {isEdited ? <span className="chatEditedBadge">{editedLabel}</span> : null}
           {hasOriginal ? (
             <button
               type="button"
@@ -102,6 +121,24 @@ function ChatMessageRow({
               </svg>
             </button>
           ) : null}
+          {canEdit ? (
+            <button
+              type="button"
+              className="chatToggleOriginalIcon"
+              onClick={() => {
+                setDraft(item.originalText);
+                setEditOpen((open) => !open);
+              }}
+              aria-expanded={editOpen}
+              aria-label={editMessageLabel}
+              title={editMessageLabel}
+            >
+              <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+              </svg>
+            </button>
+          ) : null}
         </div>
         <time className="chatTime" dateTime={new Date(item.timestamp).toISOString()}>
           {new Date(item.timestamp).toLocaleString(timeLocale)}
@@ -109,6 +146,32 @@ function ChatMessageRow({
       </div>
       <p className="chatBubbleMain">{item.translatedText}</p>
       {hasOriginal && metaOpen ? <p className="chatBubbleOriginal">{item.originalText}</p> : null}
+      {editOpen ? (
+        <div className="chatEditBox">
+          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} />
+          <div className="actions">
+            <button
+              type="button"
+              onClick={() => {
+                onSubmitEdit(item.turnId, draft.trim());
+                setEditOpen(false);
+              }}
+              disabled={!draft.trim()}
+            >
+              {saveEditLabel}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEditOpen(false);
+                setDraft(item.originalText);
+              }}
+            >
+              {cancelEditLabel}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </li>
   );
 }
@@ -340,6 +403,7 @@ function App() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [playbackUnlocked, setPlaybackUnlocked] = useState(false);
   const [permissionReady, setPermissionReady] = useState(() => getCookie(MIC_WARMUP_DONE_COOKIE) === "true");
+  const [hasUnseenEditedAbove, setHasUnseenEditedAbove] = useState(false);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const loadingOlderRef = useRef(false);
@@ -829,6 +893,35 @@ function App() {
         );
         return;
       }
+      if (event.type === "transcript.edited") {
+        setTranscripts((previous) =>
+          previous.map((row) =>
+            row.turnId === event.turnId
+              ? {
+                  ...row,
+                  speakerDisplayName: event.speakerDisplayName,
+                  originalText: event.originalText,
+                  translatedText: event.translatedText,
+                  timestamp: event.timestamp,
+                  editedAt: event.editedAt
+                }
+              : row
+          )
+        );
+        requestAnimationFrame(() => {
+          const scroller = threadRef.current;
+          const row = scroller?.querySelector(`[data-turn-id="${event.turnId}"]`) as HTMLElement | null;
+          if (!scroller || !row) {
+            return;
+          }
+          const s = scroller.getBoundingClientRect();
+          const r = row.getBoundingClientRect();
+          if (r.top < s.top) {
+            setHasUnseenEditedAbove(true);
+          }
+        });
+        return;
+      }
       if (event.type === "audio.chunk") {
         audioQueueRef.current.push({
           payloadBase64: event.payloadBase64,
@@ -1027,6 +1120,19 @@ function App() {
     if (sent) {
       setTextInput("");
     }
+  };
+
+  const submitEditedTurn = (turnId: string, sourceText: string) => {
+    if (!connected || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !sourceText.trim()) {
+      return;
+    }
+    wsRef.current.send(
+      JSON.stringify({
+        type: "turn.edit",
+        turnId,
+        sourceText: sourceText.trim()
+      })
+    );
   };
 
   const saveGlossary = async () => {
@@ -1312,7 +1418,21 @@ function App() {
             </button>
           </div>
         ) : null}
-        <div className="coreChatScroller" ref={threadRef}>
+        <div
+          className="coreChatScroller"
+          ref={threadRef}
+          onScroll={() => {
+            const el = threadRef.current;
+            if (el && el.scrollTop < 24) {
+              setHasUnseenEditedAbove(false);
+            }
+          }}
+        >
+          {hasUnseenEditedAbove ? (
+            <button type="button" className="chatEditedGlow" onClick={() => setHasUnseenEditedAbove(false)}>
+              {S.unseenEditsAbove}
+            </button>
+          ) : null}
           <div ref={topSentinelRef} className="chatTopSentinel" aria-hidden />
           {loadingOlder ? <p className="chatLoadBanner">{S.loadingOlder}</p> : null}
           {historyLoading ? <p className="chatLoadBanner">{S.loadingHistory}</p> : null}
@@ -1324,6 +1444,12 @@ function App() {
                 showOriginalLabel={S.showOriginal}
                 hideOriginalLabel={S.hideOriginal}
                 timeLocale={timeLocale}
+                canEdit={item.speakerId === clientId}
+                onSubmitEdit={submitEditedTurn}
+                editMessageLabel={S.editMessage}
+                saveEditLabel={S.saveEdit}
+                cancelEditLabel={S.cancelEdit}
+                editedLabel={S.editedMessage}
               />
             ))}
           </ul>
