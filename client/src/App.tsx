@@ -85,25 +85,30 @@ function ChatMessageRow({
   return (
     <li className="chatMessage">
       <div className="chatMeta">
-        <span className="chatSpeaker">{item.speakerDisplayName}</span>
+        <div className="chatMetaLeft">
+          <span className="chatSpeaker">{item.speakerDisplayName}</span>
+          {hasOriginal ? (
+            <button
+              type="button"
+              className="chatToggleOriginalIcon"
+              onClick={() => setMetaOpen((open) => !open)}
+              aria-expanded={metaOpen}
+              aria-label={metaOpen ? hideOriginalLabel : showOriginalLabel}
+              title={metaOpen ? hideOriginalLabel : showOriginalLabel}
+            >
+              <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          ) : null}
+        </div>
         <time className="chatTime" dateTime={new Date(item.timestamp).toISOString()}>
           {new Date(item.timestamp).toLocaleString(timeLocale)}
         </time>
       </div>
       <p className="chatBubbleMain">{item.translatedText}</p>
-      {hasOriginal ? (
-        <div className="chatOriginalWrap">
-          <button
-            type="button"
-            className="chatToggleOriginal"
-            onClick={() => setMetaOpen((open) => !open)}
-            aria-expanded={metaOpen}
-          >
-            {metaOpen ? hideOriginalLabel : showOriginalLabel}
-          </button>
-          {metaOpen ? <p className="chatBubbleOriginal">{item.originalText}</p> : null}
-        </div>
-      ) : null}
+      {hasOriginal && metaOpen ? <p className="chatBubbleOriginal">{item.originalText}</p> : null}
     </li>
   );
 }

@@ -568,6 +568,12 @@ button.onboardingPrimary {
   margin-bottom: 0.35rem;
 }
 
+.chatMetaLeft {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .chatSpeaker {
   font-size: 0.82rem;
   font-weight: 700;
@@ -586,20 +592,21 @@ button.onboardingPrimary {
   color: #f3f6fb;
 }
 
-.chatOriginalWrap {
-  margin-top: 0.35rem;
-}
-
-.chatToggleOriginal {
-  font-size: 0.78rem;
-  padding: 0.2rem 0.45rem;
-  background: transparent;
+.chatToggleOriginalIcon {
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0.12rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
   border: 1px solid #3a4759;
+  background: transparent;
   color: #9fb0c7;
 }
 
 .chatBubbleOriginal {
-  margin: 0.45rem 0 0;
+  margin: 0.35rem 0 0;
   padding: 0.45rem 0.55rem;
   font-size: 0.88rem;
   line-height: 1.4;
