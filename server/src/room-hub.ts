@@ -6,7 +6,13 @@ import type { WebSocket } from "ws";
 import { appConfig } from "./config.js";
 import { DgPcmStream } from "./deepgram-stream.js";
 import type { AppDb } from "./db.js";
-import type { ProviderPipeline, SynthesisResult, TranscribeForTurnOutput } from "./providers.js";
+import type {
+  ProviderPipeline,
+  SynthesisResult,
+  TranscribeForTurnOutput,
+  TranslationContext,
+  TranslationResult
+} from "./providers.js";
 
 type SessionParticipant = {
   clientId: string;
@@ -16,6 +22,9 @@ type SessionParticipant = {
   hearAudio: boolean;
   contextNotes: string;
 };
+
+/** Persist both app languages so `/api/history?language=…` works if a viewer was offline during the turn. */
+const VIEWER_HISTORY_LANGUAGES: SupportedLanguage[] = ["en", "ja"];
 
 type ActiveTurn = {
   speakerId: string;
@@ -437,27 +446,29 @@ export class RoomHub {
     const recentTurns = this.db.latestTurns();
 
     const participants = [...this.participants.values()];
-    const translateContext = { glossaryLines, correctionLines, recentTurns };
+    const translateContext: TranslationContext = { glossaryLines, correctionLines, recentTurns };
 
-    const turnRows = await Promise.all(
-      participants.map(async (participant) => {
-        const targetLanguage = participant.language;
-        const isSpeaker = participant.clientId === turn.speakerId;
-        const translation = isSpeaker
-          ? {
-              value: effectiveSource,
-              path: "translation.self_passthrough",
-              detail: "speaker_receives_source_text"
-            }
-          : await this.providers.translateText({
-              sourceText: effectiveSource,
-              sourceLanguage: turn.sourceLanguage,
-              targetLanguage,
-              context: translateContext
-            });
-        return { participant, targetLanguage, isSpeaker, translation, translatedText: translation.value };
-      })
-    );
+    const byLang = await this.persistViewerLanguageHistoryAndGetByLang({
+      turnId,
+      speaker: sourceSpeaker,
+      sourceLanguage: turn.sourceLanguage,
+      sourceText: effectiveSource,
+      translateContext
+    });
+
+    const turnRows = participants.map((participant) => {
+      const targetLanguage = participant.language;
+      const isSpeaker = participant.clientId === turn.speakerId;
+      const translation: TranslationResult = isSpeaker
+        ? {
+            value: effectiveSource,
+            path: "translation.self_passthrough",
+            detail: "speaker_receives_source_text"
+          }
+        : byLang.get(targetLanguage)!;
+      const translatedText = translation.value;
+      return { participant, targetLanguage, isSpeaker, translation, translatedText };
+    });
 
     const ttsKey = (lang: SupportedLanguage, text: string) => `${lang}::${text}`;
     const ttsCache = new Map<string, SynthesisResult>();
@@ -500,16 +511,6 @@ export class RoomHub {
       const { participant, targetLanguage, isSpeaker, translation, translatedText } = row;
       const listenerGetsTts = !isSpeaker && participant.hearAudio;
       const shouldSynthesizeTts = listenerGetsTts;
-
-      this.db.insertTurn({
-        turnId,
-        speakerId: sourceSpeaker.clientId,
-        speakerName: sourceSpeaker.displayName,
-        sourceLanguage: turn.sourceLanguage,
-        sourceText: effectiveSource,
-        targetLanguage,
-        targetText: translatedText
-      });
 
       this.send(participant.socket, {
         type: "transcript.chunk",
@@ -569,6 +570,46 @@ export class RoomHub {
     });
     this.clearForcedCommitSchedule(turn);
     this.activeTurns.delete(turnId);
+  }
+
+  /**
+   * Writes one `turns` row per supported viewer language, then returns those translations for reuse when
+   * emitting `transcript.chunk` to currently connected sockets.
+   */
+  private async persistViewerLanguageHistoryAndGetByLang(args: {
+    turnId: string;
+    speaker: SessionParticipant;
+    sourceLanguage: SupportedLanguage;
+    sourceText: string;
+    translateContext: TranslationContext;
+  }): Promise<Map<SupportedLanguage, TranslationResult>> {
+    const byLang = new Map<SupportedLanguage, TranslationResult>();
+    for (const targetLanguage of VIEWER_HISTORY_LANGUAGES) {
+      const translation: TranslationResult =
+        targetLanguage === args.sourceLanguage
+          ? {
+              value: args.sourceText,
+              path: "translation.self_passthrough",
+              detail: "speaker_receives_source_text"
+            }
+          : await this.providers.translateText({
+              sourceText: args.sourceText,
+              sourceLanguage: args.sourceLanguage,
+              targetLanguage,
+              context: args.translateContext
+            });
+      this.db.insertTurn({
+        turnId: args.turnId,
+        speakerId: args.speaker.clientId,
+        speakerName: args.speaker.displayName,
+        sourceLanguage: args.sourceLanguage,
+        sourceText: args.sourceText,
+        targetLanguage,
+        targetText: translation.value
+      });
+      byLang.set(targetLanguage, translation);
+    }
+    return byLang;
   }
 
   private shouldSttStream(): boolean {
@@ -715,27 +756,29 @@ export class RoomHub {
       .map((entry) => `${entry.wrongText} => ${entry.rightText} (${entry.context})`);
     const recentTurns = this.db.latestTurns();
     const participants = [...this.participants.values()];
-    const translateContext = { glossaryLines, correctionLines, recentTurns };
+    const translateContext: TranslationContext = { glossaryLines, correctionLines, recentTurns };
 
-    const turnRows = await Promise.all(
-      participants.map(async (participant) => {
-        const targetLanguage = participant.language;
-        const isSpeaker = participant.clientId === turn.speakerId;
-        const translation = isSpeaker
-          ? {
-              value: sourceText,
-              path: "translation.self_passthrough",
-              detail: "speaker_receives_source_text"
-            }
-          : await this.providers.translateText({
-              sourceText,
-              sourceLanguage: turn.sourceLanguage,
-              targetLanguage,
-              context: translateContext
-            });
-        return { participant, targetLanguage, isSpeaker, translation, translatedText: translation.value };
-      })
-    );
+    const byLang = await this.persistViewerLanguageHistoryAndGetByLang({
+      turnId: args.turnId,
+      speaker: sourceSpeaker,
+      sourceLanguage: turn.sourceLanguage,
+      sourceText,
+      translateContext
+    });
+
+    const turnRows = participants.map((participant) => {
+      const targetLanguage = participant.language;
+      const isSpeaker = participant.clientId === turn.speakerId;
+      const translation: TranslationResult = isSpeaker
+        ? {
+            value: sourceText,
+            path: "translation.self_passthrough",
+            detail: "speaker_receives_source_text"
+          }
+        : byLang.get(targetLanguage)!;
+      const translatedText = translation.value;
+      return { participant, targetLanguage, isSpeaker, translation, translatedText };
+    });
 
     const ttsKey = (lang: SupportedLanguage, text: string) => `${lang}::${text}`;
     const ttsCache = new Map<string, SynthesisResult>();
@@ -777,16 +820,6 @@ export class RoomHub {
     for (const row of turnRows) {
       const { participant, targetLanguage, translation, translatedText } = row;
       const listenerGetsTts = participant.clientId !== turn.speakerId && participant.hearAudio;
-
-      this.db.insertTurn({
-        turnId: args.turnId,
-        speakerId: sourceSpeaker.clientId,
-        speakerName: sourceSpeaker.displayName,
-        sourceLanguage: turn.sourceLanguage,
-        sourceText,
-        targetLanguage,
-        targetText: translatedText
-      });
 
       this.send(participant.socket, {
         type: "transcript.chunk",

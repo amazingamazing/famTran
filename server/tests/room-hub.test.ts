@@ -58,6 +58,40 @@ describe("RoomHub", () => {
     rmSync(dbDir, { recursive: true, force: true });
   });
 
+  it("stores Japanese history when only English clients were connected during the turn", async () => {
+    const enSocket = new MockSocket();
+    const enClientId = hub.join(enSocket as never, {
+      type: "session.join",
+      displayName: "Thomas",
+      language: "en",
+      mode: "text_only",
+      contextNotes: "",
+      hearAudio: true
+    });
+
+    await hub.handleEvent(enClientId, {
+      type: "turn.start",
+      turnId: "turn-solo-en",
+      speakerLanguage: "en"
+    });
+    await hub.handleEvent(enClientId, {
+      type: "audio.input",
+      turnId: "turn-solo-en",
+      payloadBase64: Buffer.from("Hello from solo").toString("base64"),
+      sequence: 0,
+      isLast: true
+    });
+    await hub.handleEvent(enClientId, {
+      type: "turn.stop",
+      turnId: "turn-solo-en",
+    });
+
+    const jaHistory = db.historyForLanguage("ja", { limit: 20 });
+    expect(jaHistory.some((row) => row.turnId === "turn-solo-en")).toBe(true);
+    const jaRow = jaHistory.find((row) => row.turnId === "turn-solo-en");
+    expect(jaRow?.originalText).toBe("Hello from solo");
+  });
+
   it("sends translated transcript rows to participants", async () => {
     const enSocket = new MockSocket();
     const jaSocket = new MockSocket();

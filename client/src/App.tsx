@@ -1313,7 +1313,7 @@ function App() {
           height: window.innerHeight
         }
       },
-      recentTranscriptSample: transcripts.slice(0, 5).map((item) => ({
+      recentTranscriptSample: transcripts.slice(-5).map((item) => ({
         timestamp: item.timestamp,
         turnId: item.turnId,
         translatedText: item.translatedText,
