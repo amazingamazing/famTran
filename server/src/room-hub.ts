@@ -91,6 +91,15 @@ const normalize = (text: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+/** Whitespace / Unicode form for “already emitted this text?” checks (no lowercasing — keeps JA + names stable). */
+const turnCanonWords = (s: string): string[] =>
+  s
+    .normalize("NFKC")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .split(/\s+/u)
+    .filter(Boolean);
+
 const dedupeLeadingOverlap = (alreadyCommitted: string, incoming: string): string => {
   const committedWords = normalize(alreadyCommitted).split(" ").filter(Boolean);
   const incomingWordsRaw = incoming.trim().split(/\s+/).filter(Boolean);
@@ -98,7 +107,7 @@ const dedupeLeadingOverlap = (alreadyCommitted: string, incoming: string): strin
   if (committedWords.length === 0 || incomingWordsNorm.length === 0) {
     return incoming.trim();
   }
-  const maxOverlap = Math.min(12, committedWords.length, incomingWordsNorm.length);
+  const maxOverlap = Math.min(96, committedWords.length, incomingWordsNorm.length);
   let overlap = 0;
   for (let n = maxOverlap; n >= 1; n -= 1) {
     const c = committedWords.slice(-n).join(" ");
@@ -407,7 +416,12 @@ export class RoomHub {
     const committed = turn.committedStreamSource.trim();
     let effectiveSource = fullSourceText;
     if (committed.length > 0) {
-      if (fullSourceText === committed) {
+      const cw = turnCanonWords(committed);
+      const fw = turnCanonWords(fullSourceText);
+      const cCommit = cw.join(" ");
+      const cFull = fw.join(" ");
+
+      if (cFull === cCommit) {
         await this.finalizeStreamedTurnDebugOnly({
           turnId,
           turn,
@@ -416,7 +430,22 @@ export class RoomHub {
         });
         return;
       }
-      if (fullSourceText.startsWith(committed)) {
+
+      const wordMatch = (a: string, b: string) => normalize(a) === normalize(b);
+      if (cw.length > 0 && fw.length >= cw.length && cw.every((w, i) => wordMatch(fw[i] ?? "", w))) {
+        const remainderWords = fw.slice(cw.length);
+        const remainderJoined = remainderWords.join(" ").trim();
+        if (!remainderJoined) {
+          await this.finalizeStreamedTurnDebugOnly({
+            turnId,
+            turn,
+            fullSourceText,
+            turnTranscription
+          });
+          return;
+        }
+        effectiveSource = remainderJoined;
+      } else if (fullSourceText.startsWith(committed)) {
         let remainder = fullSourceText.slice(committed.length).trim();
         remainder = remainder.replace(/^[\s.,;!?、。，]+/u, "").trim();
         if (remainder.length === 0) {
@@ -746,6 +775,13 @@ export class RoomHub {
 
     const sourceText = dedupeLeadingOverlap(turn.committedStreamSource, args.segmentText);
     if (!sourceText.trim()) {
+      return;
+    }
+    const committedBefore = turn.committedStreamSource.trim();
+    const combinedCanonKey = turnCanonWords(
+      committedBefore ? `${committedBefore} ${sourceText}`.trim() : sourceText
+    ).join(" ");
+    if (committedBefore.length > 0 && combinedCanonKey === turnCanonWords(committedBefore).join(" ")) {
       return;
     }
     const glossaryLines = this.db

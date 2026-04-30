@@ -27,7 +27,7 @@ export const appConfig = {
   sttStream: process.env.STT_STREAM === "1" || process.env.STT_STREAM === "true",
   /**
    * When true (with sttStream + Deepgram), debounced interim STT is sent as `transcript.live` to the **speaker only** (self-monitor).
-   * Listeners only receive final `transcript.chunk` + one-shot `audio.chunk` after `turn.stop`.
+   * Listeners receive phrase-final `transcript.chunk` + TTS during the turn; `turn.stop` may emit a final chunk only when the batch STT adds new tail text beyond streamed phrases.
    */
   liveCaptions: process.env.LIVE_CAPTIONS === "1" || process.env.LIVE_CAPTIONS === "true",
   /**
