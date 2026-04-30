@@ -73,6 +73,8 @@ export type AppCopy = {
   micWarmupTitle: string;
   micWarmupBody: string;
   micWarmupAction: string;
+  micEnableFirst: string;
+  jumpToLatest: string;
   menuAria: string;
   drawerTitle: string;
   drawerClose: string;
@@ -176,8 +178,11 @@ const EN: AppCopy = {
   statusDebugCopyFailed: "Could not copy debug blob. Retry in Safari app context.",
   reconnect: "Reconnect",
   micWarmupTitle: "Enable microphone and audio",
-  micWarmupBody: "Please allow microphone and playback now so talking works immediately.",
+  micWarmupBody:
+    "Each visit, tap below once to allow microphone and playback (your browser requires a tap before the prompt).",
   micWarmupAction: "Enable now",
+  micEnableFirst: "Tap “Enable now” above to allow the microphone first.",
+  jumpToLatest: "Latest messages",
   menuAria: "Open settings menu",
   drawerTitle: "Settings",
   drawerClose: "Close",
@@ -284,8 +289,11 @@ const JA: AppCopy = {
   statusDebugCopyFailed: "コピーに失敗しました。Safariのコンテキストで再試行してください。",
   reconnect: "再接続",
   micWarmupTitle: "マイクと音声を有効にする",
-  micWarmupBody: "会話をすぐ始められるよう、先にマイクと再生を許可してください。",
+  micWarmupBody:
+    "訪問のたびに、下のボタンを一度タップしてマイクと再生を許可してください（ブラウザはタップ後に許可ダイアログを出します）。",
   micWarmupAction: "今すぐ有効化",
+  micEnableFirst: "先に上の「今すぐ有効化」でマイクを許可してください。",
+  jumpToLatest: "最新のメッセージへ",
   menuAria: "設定メニューを開く",
   drawerTitle: "設定",
   drawerClose: "閉じる",

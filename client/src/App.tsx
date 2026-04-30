@@ -241,7 +241,8 @@ const HTTP_BASE_URL =
     : `${window.location.protocol}//${window.location.host}`;
 
 const createTurnId = () => `turn-${crypto.randomUUID()}`;
-const MIC_WARMUP_DONE_COOKIE = "family_translation_mic_warmup_done";
+
+const CHAT_PIN_THRESHOLD = 80;
 
 const encodeStringAsBase64 = (value: string) => btoa(unescape(encodeURIComponent(value)));
 const AUTOPILOT_MIN_MS = 15_000;
@@ -433,11 +434,25 @@ function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [playbackUnlocked, setPlaybackUnlocked] = useState(false);
-  const [permissionReady, setPermissionReady] = useState(() => getCookie(MIC_WARMUP_DONE_COOKIE) === "true");
+  const [permissionReady, setPermissionReady] = useState(false);
   const [hasUnseenEditedAbove, setHasUnseenEditedAbove] = useState(false);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const loadingOlderRef = useRef(false);
+  const pinnedToBottomRef = useRef(true);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+
+  const updateChatScrollPin = useCallback(() => {
+    const el = threadRef.current;
+    if (!el) {
+      return;
+    }
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const pinned = gap <= CHAT_PIN_THRESHOLD;
+    pinnedToBottomRef.current = pinned;
+    const scrollable = el.scrollHeight > el.clientHeight + 4;
+    setShowJumpToLatest(!pinned && scrollable);
+  }, []);
 
   const addDebugEvent = (message: string) => {
     const entry = `${new Date().toISOString()} ${message}`;
@@ -650,6 +665,10 @@ function App() {
     if (el) {
       el.scrollTop = el.scrollHeight;
     }
+    pinnedToBottomRef.current = true;
+    requestAnimationFrame(() => {
+      setShowJumpToLatest(false);
+    });
   }, [historyLoading, onboardingDone, language]);
 
   const loadOlderHistory = useCallback(async () => {
@@ -678,12 +697,13 @@ function App() {
         if (el) {
           el.scrollTop += el.scrollHeight - prevHeight;
         }
+        updateChatScrollPin();
       });
     } finally {
       loadingOlderRef.current = false;
       setLoadingOlder(false);
     }
-  }, [historyHasMore, language, onboardingDone, transcripts]);
+  }, [historyHasMore, language, onboardingDone, transcripts, updateChatScrollPin]);
 
   useEffect(() => {
     if (!onboardingDone) {
@@ -717,23 +737,12 @@ function App() {
         }
       });
       stream.getTracks().forEach((track) => track.stop());
-      setCookie(MIC_WARMUP_DONE_COOKIE, "true");
       setPermissionReady(true);
       addDebugEvent("permissions.warmup.ok");
     } catch {
       addDebugEvent("permissions.warmup.failed");
     }
   }, [unlockPlaybackAudio]);
-
-  useEffect(() => {
-    if (!onboardingDone || permissionReady) {
-      return;
-    }
-    const id = window.setTimeout(() => {
-      void runPermissionWarmup();
-    }, 0);
-    return () => window.clearTimeout(id);
-  }, [onboardingDone, permissionReady, runPermissionWarmup]);
 
   const completeOnboardingWithName = async () => {
     const name = onboardingNameDraft.trim();
@@ -915,8 +924,14 @@ function App() {
         ]);
         requestAnimationFrame(() => {
           const el = threadRef.current;
-          if (el) {
+          if (!el) {
+            return;
+          }
+          if (pinnedToBottomRef.current) {
             el.scrollTop = el.scrollHeight;
+            setShowJumpToLatest(false);
+          } else if (el.scrollHeight > el.clientHeight + 4) {
+            setShowJumpToLatest(true);
           }
         });
         addDebugEvent(
@@ -941,8 +956,13 @@ function App() {
         );
         requestAnimationFrame(() => {
           const scroller = threadRef.current;
+          if (pinnedToBottomRef.current && scroller) {
+            scroller.scrollTop = scroller.scrollHeight;
+            setShowJumpToLatest(false);
+          }
           const row = scroller?.querySelector(`[data-turn-id="${event.turnId}"]`) as HTMLElement | null;
           if (!scroller || !row) {
+            updateChatScrollPin();
             return;
           }
           const s = scroller.getBoundingClientRect();
@@ -950,6 +970,7 @@ function App() {
           if (r.top < s.top) {
             setHasUnseenEditedAbove(true);
           }
+          updateChatScrollPin();
         });
         return;
       }
@@ -1069,6 +1090,10 @@ function App() {
   const startMicTest = async () => {
     if (!connected || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       setStatusMessage(S.statusConnectBeforeMic);
+      return;
+    }
+    if (!permissionReady) {
+      setStatusMessage(S.micEnableFirst);
       return;
     }
     if (micTestActive) {
@@ -1470,6 +1495,7 @@ function App() {
             if (el && el.scrollTop < 24) {
               setHasUnseenEditedAbove(false);
             }
+            updateChatScrollPin();
           }}
         >
           {hasUnseenEditedAbove ? (
@@ -1500,6 +1526,23 @@ function App() {
               />
             ))}
           </ul>
+          {showJumpToLatest ? (
+            <button
+              type="button"
+              className="chatJumpToLatest"
+              onClick={() => {
+                const el = threadRef.current;
+                if (!el) {
+                  return;
+                }
+                el.scrollTop = el.scrollHeight;
+                pinnedToBottomRef.current = true;
+                setShowJumpToLatest(false);
+              }}
+            >
+              {S.jumpToLatest}
+            </button>
+          ) : null}
         </div>
       </section>
 
