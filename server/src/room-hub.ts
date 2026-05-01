@@ -194,6 +194,33 @@ const takeAllCompleteSentencesFrom = (full: string, start: number): { chunk: str
   };
 };
 
+/** True if merged text has at least one probable sentence end (same boundary rules as `takeAllCompleteSentencesFrom`). */
+const mergedTranscriptHasSentenceBreak = (full: string): boolean => {
+  for (let i = 0; i < full.length; i++) {
+    const c = full[i];
+    if (!SENTENCE_END_CHARS.test(c)) {
+      continue;
+    }
+    const prevCh = i > 0 ? full[i - 1] : "";
+    const nextCh = full[i + 1];
+    if (c === "." && /\d/.test(prevCh) && nextCh !== undefined && /\d/.test(nextCh)) {
+      continue;
+    }
+    const isBoundary =
+      nextCh === undefined ||
+      /\s/.test(nextCh) ||
+      nextCh === '"' ||
+      nextCh === "'" ||
+      nextCh === "」" ||
+      nextCh === "）" ||
+      nextCh === "]";
+    if (isBoundary) {
+      return true;
+    }
+  }
+  return false;
+};
+
 export class RoomHub {
   /** Everyone in the single family session. */
   private readonly participants = new Map<string, SessionParticipant>();
@@ -860,6 +887,11 @@ export class RoomHub {
    * After each merged `is_final` (or forced rolling delta), emit translation for “short” turns immediately,
    * or for “long” turns only when a sentence-ending marker appears; remainder waits for more finals or
    * turn stop (see `completeTurn` tail flush).
+   *
+   * Short mode only applies while the merged transcript is still tiny **and** has no sentence-ending punctuation
+   * yet. Once the stream contains something like “First sentence.” we switch to sentence batching even if the
+   * character count is still below `shortUtteranceMaxChars`, so Deepgram phrase finals mid-clause
+   * do not get translated early (e.g. “…the shame” vs “cone…”).
    */
   private async flushPendingTranslationChunks(turnId: string) {
     const turn = this.activeTurns.get(turnId);
@@ -870,7 +902,8 @@ export class RoomHub {
     if (!full.trim()) {
       return;
     }
-    const shortMode = full.length <= appConfig.shortUtteranceMaxChars;
+    const shortMode =
+      full.length <= appConfig.shortUtteranceMaxChars && !mergedTranscriptHasSentenceBreak(full);
 
     if (shortMode) {
       const tail = full.slice(turn.streamEmittedLen);

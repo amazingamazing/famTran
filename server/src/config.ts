@@ -54,9 +54,10 @@ export const appConfig = {
    */
   forcedStreamCommitMinChars: Math.max(1, Number(process.env.FORCED_STREAM_COMMIT_MIN_CHARS ?? 24) || 24),
   /**
-   * While merged transcript length is at most this many characters, each Deepgram `is_final` phrase is
-   * translated as soon as it arrives (legacy “short utterance” behavior). Above this threshold, translation
-   * waits for sentence-ending punctuation in the streaming flush logic on the server.
+   * While merged transcript length is at most this many characters **and** it still has no sentence-ending
+   * punctuation (. ? ! 。), each Deepgram `is_final` phrase is translated as soon as it arrives (“short
+   * utterance”). Once any sentence break appears in the merged text, the server waits for full sentences even
+   * below this length (see `mergedTranscriptHasSentenceBreak` in room-hub).
    */
   shortUtteranceMaxChars: Math.max(8, Number(process.env.SHORT_UTTERANCE_MAX_CHARS ?? 120) || 120)
 };
