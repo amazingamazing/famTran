@@ -59,6 +59,16 @@ export const appConfig = {
    * utterance”). Once any sentence break appears in the merged text, the server waits for full sentences even
    * below this length (see `mergedTranscriptHasSentenceBreak` in room-hub).
    */
-  shortUtteranceMaxChars: Math.max(8, Number(process.env.SHORT_UTTERANCE_MAX_CHARS ?? 120) || 120)
+  shortUtteranceMaxChars: Math.max(8, Number(process.env.SHORT_UTTERANCE_MAX_CHARS ?? 120) || 120),
+  /**
+   * Sentence-mode streaming: emit at most this many complete sentences per translation (then wait for more
+   * `is_final` or turn stop). Keeps TTS/translation chunks bounded when STT drops many sentences at once.
+   */
+  streamTranslationMaxSentences: Math.max(1, Number(process.env.STREAM_TRANSLATION_MAX_SENTENCES ?? 2) || 2),
+  /**
+   * Sentence-mode streaming: also cut after this many characters once at least one full sentence was taken
+   * (whichever comes first with max sentences).
+   */
+  streamTranslationMaxChars: Math.max(80, Number(process.env.STREAM_TRANSLATION_MAX_CHARS ?? 280) || 280)
 };
 

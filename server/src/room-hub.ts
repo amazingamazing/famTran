@@ -130,16 +130,31 @@ const dedupeLeadingOverlap = (alreadyCommitted: string, incoming: string): strin
   return sliced;
 };
 
-/** Append a new STT segment onto the rolling merged transcript, stripping prefix overlap (re-finalization / rewrite). */
+/**
+ * Append a new STT segment onto the rolling merged transcript. If Deepgram sends a **cumulative** refresh
+ * (incoming is the same opening words as current, then more), replace with incoming — avoids doubling when a
+ * late `is_final` repeats the whole utterance.
+ */
 const appendStreamSegment = (current: string, incoming: string): string => {
-  const delta = dedupeLeadingOverlap(current, incoming).trim();
+  const a = current.trim();
+  const b = incoming.trim();
+  if (!b) {
+    return a;
+  }
+  if (!a) {
+    return b;
+  }
+  const wordMatch = (x: string, y: string) => normalize(x) === normalize(y);
+  const aw = turnCanonWords(a);
+  const bw = turnCanonWords(b);
+  if (aw.length > 0 && bw.length >= aw.length && aw.every((w, i) => wordMatch(bw[i] ?? "", w))) {
+    return b;
+  }
+  const delta = dedupeLeadingOverlap(a, b).trim();
   if (!delta) {
-    return current;
+    return a;
   }
-  if (!current) {
-    return delta;
-  }
-  return `${current} ${delta}`.trim();
+  return `${a} ${delta}`.trim();
 };
 
 const SENTENCE_END_CHARS = /[.!?。]/;
@@ -190,6 +205,64 @@ const takeAllCompleteSentencesFrom = (full: string, start: number): { chunk: str
   }
   return {
     chunk: full.slice(start, lastCompleteExclusive).trim(),
+    nextStart: pos
+  };
+};
+
+/** Like `takeAllCompleteSentencesFrom` but stops after `maxSentences` sentences or `maxChars` (after a full sentence). */
+const takeBoundedCompleteSentencesFrom = (
+  full: string,
+  start: number,
+  opts: { maxSentences: number; maxChars: number }
+): { chunk: string; nextStart: number } => {
+  let pos = start;
+  while (pos < full.length && /\s/.test(full[pos])) {
+    pos += 1;
+  }
+  const sliceStart = start;
+  let lastCompleteExclusive = -1;
+  let sentenceCount = 0;
+  while (pos < full.length) {
+    const rel = full.slice(pos).search(SENTENCE_END_CHARS);
+    if (rel < 0) {
+      break;
+    }
+    const p = pos + rel;
+    const punct = full[p];
+    const prev = full[p - 1];
+    const next = full[p + 1];
+    if (punct === "." && prev !== undefined && /\d/.test(prev) && next !== undefined && /\d/.test(next)) {
+      pos = p + 1;
+      continue;
+    }
+    const isBoundary =
+      next === undefined ||
+      /\s/.test(next) ||
+      next === '"' ||
+      next === "'" ||
+      next === "」" ||
+      next === "）" ||
+      next === "]";
+    if (!isBoundary) {
+      pos = p + 1;
+      continue;
+    }
+    sentenceCount += 1;
+    lastCompleteExclusive = p + 1;
+    pos = p + 1;
+    while (pos < full.length && /\s/.test(full[pos])) {
+      pos += 1;
+    }
+    const chunkSoFar = full.slice(sliceStart, lastCompleteExclusive).trim();
+    if (sentenceCount >= opts.maxSentences || chunkSoFar.length >= opts.maxChars) {
+      break;
+    }
+  }
+  if (lastCompleteExclusive < sliceStart) {
+    return { chunk: "", nextStart: start };
+  }
+  return {
+    chunk: full.slice(sliceStart, lastCompleteExclusive).trim(),
     nextStart: pos
   };
 };
@@ -567,6 +640,17 @@ export class RoomHub {
     const committed = turn.committedStreamSource.trim();
     let effectiveSource = fullSourceText.trim();
     if (committed.length > 0) {
+      const cKey = turnCanonWords(committed).join(" ");
+      const fKey = turnCanonWords(fullSourceText).join(" ");
+      if (cKey === fKey) {
+        await this.finalizeStreamedTurnDebugOnly({
+          turnId,
+          turn,
+          fullSourceText,
+          turnTranscription
+        });
+        return;
+      }
       const remainder = this.resolveRemainderAfterCommitted(committed, fullSourceText).trim();
       if (!remainder) {
         await this.finalizeStreamedTurnDebugOnly({
@@ -918,14 +1002,26 @@ export class RoomHub {
       return;
     }
 
-    const { chunk, nextStart } = takeAllCompleteSentencesFrom(full, turn.streamEmittedLen);
-    if (!chunk) {
-      return;
-    }
-    await this.deliverCommittedPhrase({ turnId, segmentText: chunk });
-    const t2 = this.activeTurns.get(turnId);
-    if (t2) {
-      t2.streamEmittedLen = nextStart;
+    let guard = 0;
+    while (guard < 200) {
+      guard += 1;
+      const t = this.activeTurns.get(turnId);
+      if (!t) {
+        return;
+      }
+      const merged = t.streamMergedSource;
+      const { chunk, nextStart } = takeBoundedCompleteSentencesFrom(merged, t.streamEmittedLen, {
+        maxSentences: appConfig.streamTranslationMaxSentences,
+        maxChars: appConfig.streamTranslationMaxChars
+      });
+      if (!chunk) {
+        return;
+      }
+      await this.deliverCommittedPhrase({ turnId, segmentText: chunk });
+      const t2 = this.activeTurns.get(turnId);
+      if (t2) {
+        t2.streamEmittedLen = nextStart;
+      }
     }
   }
 
@@ -939,11 +1035,14 @@ export class RoomHub {
       return;
     }
 
-    const sourceText = dedupeLeadingOverlap(turn.committedStreamSource, args.segmentText);
-    if (!sourceText.trim()) {
+    const committedBefore = turn.committedStreamSource.trim();
+    let sourceText = this.resolveRemainderAfterCommitted(turn.committedStreamSource, args.segmentText).trim();
+    if (!sourceText) {
+      sourceText = dedupeLeadingOverlap(turn.committedStreamSource, args.segmentText).trim();
+    }
+    if (!sourceText) {
       return;
     }
-    const committedBefore = turn.committedStreamSource.trim();
     const combinedCanonKey = turnCanonWords(
       committedBefore ? `${committedBefore} ${sourceText}`.trim() : sourceText
     ).join(" ");
