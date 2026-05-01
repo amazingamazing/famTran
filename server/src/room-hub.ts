@@ -5,6 +5,20 @@ import type { WebSocket } from "ws";
 
 import { appConfig } from "./config.js";
 import { DgPcmStream } from "./deepgram-stream.js";
+
+/** Live translation / STT chunking (change here; not environment variables). */
+const STREAM = {
+  utteranceCommitDelayMs: 0,
+  streamSegmentSettleMs: 250,
+  /** 0 = use Deepgram default for end-of-phrase silence. */
+  deepgramLiveEndpointingMs: 0,
+  /** 0 = disabled. Non-zero forces rolling text into the merge on a timer (can interact badly with sentence batching). */
+  forcedStreamCommitMs: 0,
+  forcedStreamCommitMinChars: 24,
+  shortUtteranceMaxChars: 120,
+  streamTranslationMaxSentences: 2,
+  streamTranslationMaxChars: 280
+} as const;
 import type { AppDb } from "./db.js";
 import type {
   ProviderPipeline,
@@ -155,6 +169,51 @@ const appendStreamSegment = (current: string, incoming: string): string => {
     return a;
   }
   return `${a} ${delta}`.trim();
+};
+
+/**
+ * After the merged transcript string changes (especially when a cumulative `is_final` **replaces** the buffer),
+ * realign `streamEmittedLen` so it points after the longest prefix of `mergedRaw` that matches words already in
+ * `committedDelivered`. Otherwise the emit cursor still refers to **old** string indices and the next flush
+ * re-translates the **entire** utterance (duplicate chunks).
+ */
+const syncStreamEmittedLenFromCommitted = (mergedRaw: string, committedDelivered: string): number => {
+  const cw = turnCanonWords(committedDelivered);
+  const fw = turnCanonWords(mergedRaw);
+  if (cw.length === 0 || fw.length === 0) {
+    return 0;
+  }
+  const wordEq = (x: string, y: string) => normalize(x) === normalize(y);
+  let matched = 0;
+  for (; matched < cw.length && matched < fw.length; matched++) {
+    if (!wordEq(cw[matched]!, fw[matched]!)) {
+      break;
+    }
+  }
+  if (matched === 0) {
+    return 0;
+  }
+  const re = /\S+/gu;
+  let count = 0;
+  let end = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(mergedRaw)) !== null) {
+    if (count >= matched) {
+      break;
+    }
+    if (!wordEq(m[0], fw[count]!)) {
+      break;
+    }
+    count++;
+    end = m.index + m[0].length;
+  }
+  if (count < matched) {
+    return 0;
+  }
+  while (end < mergedRaw.length && /\s/.test(mergedRaw[end])) {
+    end++;
+  }
+  return end;
 };
 
 const SENTENCE_END_CHARS = /[.!?。]/;
@@ -420,7 +479,7 @@ export class RoomHub {
               turn.usedPhraseStreaming = true;
               turn.dgStream = new DgPcmStream(key, turn.sourceLanguage, {
                 endpointingMs:
-                  appConfig.deepgramLiveEndpointingMs > 0 ? appConfig.deepgramLiveEndpointingMs : undefined,
+                  STREAM.deepgramLiveEndpointingMs > 0 ? STREAM.deepgramLiveEndpointingMs : undefined,
                 onTranscript: live
                   ? (sourceText: string) => {
                       this.scheduleLiveCaption({ turnId: tId, sourceText });
@@ -602,8 +661,8 @@ export class RoomHub {
     if (appConfig.liveCaptions && this.shouldSttStream() && turn.latestLiveSource.trim().length > 0) {
       await this.flushLiveCaptions(turnId);
     }
-    if (appConfig.utteranceCommitDelayMs > 0) {
-      await sleepMs(appConfig.utteranceCommitDelayMs);
+    if (STREAM.utteranceCommitDelayMs > 0) {
+      await sleepMs(STREAM.utteranceCommitDelayMs);
     }
     const sourceSpeaker = this.participants.get(turn.speakerId);
     if (!sourceSpeaker) {
@@ -613,8 +672,8 @@ export class RoomHub {
     }
 
     await turn.segmentPipeline.catch(() => undefined);
-    if (turn.committedStreamSource.trim().length > 0 && appConfig.streamSegmentSettleMs > 0) {
-      await sleepMs(appConfig.streamSegmentSettleMs);
+    if (turn.committedStreamSource.trim().length > 0 && STREAM.streamSegmentSettleMs > 0) {
+      await sleepMs(STREAM.streamSegmentSettleMs);
     }
 
     const turnTranscription = await this.resolveTranscription(turn);
@@ -628,13 +687,20 @@ export class RoomHub {
 
     if (turn.usedPhraseStreaming) {
       turn.streamMergedSource = fullSourceText;
+      turn.streamEmittedLen = syncStreamEmittedLenFromCommitted(
+        turn.streamMergedSource,
+        turn.committedStreamSource
+      );
       const tail = this.resolveRemainderAfterCommitted(turn.committedStreamSource, fullSourceText).trim();
       if (tail.length > 0) {
         await turn.segmentPipeline.catch(() => undefined);
         await this.deliverCommittedPhrase({ turnId, segmentText: tail });
         await turn.segmentPipeline.catch(() => undefined);
       }
-      turn.streamEmittedLen = turn.streamMergedSource.length;
+      turn.streamEmittedLen = syncStreamEmittedLenFromCommitted(
+        turn.streamMergedSource,
+        turn.committedStreamSource
+      );
     }
 
     const committed = turn.committedStreamSource.trim();
@@ -862,7 +928,7 @@ export class RoomHub {
   }
 
   private scheduleForcedCommit(turnId: string, turn: ActiveTurn) {
-    if (!this.shouldSttStream() || appConfig.forcedStreamCommitMs <= 0) {
+    if (!this.shouldSttStream() || STREAM.forcedStreamCommitMs <= 0) {
       return;
     }
     this.clearForcedCommitSchedule(turn);
@@ -872,7 +938,7 @@ export class RoomHub {
         return;
       }
       const now = Date.now();
-      if (now - current.lastForcedCommitAtMs < appConfig.forcedStreamCommitMs) {
+      if (now - current.lastForcedCommitAtMs < STREAM.forcedStreamCommitMs) {
         return;
       }
       const rolling = current.latestLiveSource.trim();
@@ -880,13 +946,17 @@ export class RoomHub {
         return;
       }
       const delta = dedupeLeadingOverlap(current.streamMergedSource, rolling).trim();
-      if (delta.length < appConfig.forcedStreamCommitMinChars) {
+      if (delta.length < STREAM.forcedStreamCommitMinChars) {
         return;
       }
       current.lastForcedCommitAtMs = now;
       current.streamMergedSource = current.streamMergedSource
         ? `${current.streamMergedSource} ${delta}`.trim()
         : delta;
+      current.streamEmittedLen = syncStreamEmittedLenFromCommitted(
+        current.streamMergedSource,
+        current.committedStreamSource
+      );
       current.segmentPipeline = current.segmentPipeline
         .catch(() => undefined)
         .then(() => this.flushPendingTranslationChunks(turnId));
@@ -962,6 +1032,10 @@ export class RoomHub {
       return;
     }
     turn.streamMergedSource = appendStreamSegment(turn.streamMergedSource, seg);
+    turn.streamEmittedLen = syncStreamEmittedLenFromCommitted(
+      turn.streamMergedSource,
+      turn.committedStreamSource
+    );
     turn.segmentPipeline = turn.segmentPipeline
       .catch(() => undefined)
       .then(() => this.flushPendingTranslationChunks(args.turnId));
@@ -974,7 +1048,7 @@ export class RoomHub {
    *
    * Short mode only applies while the merged transcript is still tiny **and** has no sentence-ending punctuation
    * yet. Once the stream contains something like “First sentence.” we switch to sentence batching even if the
-   * character count is still below `shortUtteranceMaxChars`, so Deepgram phrase finals mid-clause
+   * character count is still below the `STREAM.shortUtteranceMaxChars` cap, so Deepgram phrase finals mid-clause
    * do not get translated early (e.g. “…the shame” vs “cone…”).
    */
   private async flushPendingTranslationChunks(turnId: string) {
@@ -987,7 +1061,7 @@ export class RoomHub {
       return;
     }
     const shortMode =
-      full.length <= appConfig.shortUtteranceMaxChars && !mergedTranscriptHasSentenceBreak(full);
+      full.length <= STREAM.shortUtteranceMaxChars && !mergedTranscriptHasSentenceBreak(full);
 
     if (shortMode) {
       const tail = full.slice(turn.streamEmittedLen);
@@ -1011,8 +1085,8 @@ export class RoomHub {
       }
       const merged = t.streamMergedSource;
       const { chunk, nextStart } = takeBoundedCompleteSentencesFrom(merged, t.streamEmittedLen, {
-        maxSentences: appConfig.streamTranslationMaxSentences,
-        maxChars: appConfig.streamTranslationMaxChars
+        maxSentences: STREAM.streamTranslationMaxSentences,
+        maxChars: STREAM.streamTranslationMaxChars
       });
       if (!chunk) {
         return;

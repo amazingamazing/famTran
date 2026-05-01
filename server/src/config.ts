@@ -29,46 +29,5 @@ export const appConfig = {
    * When true (with sttStream + Deepgram), debounced interim STT is sent as `transcript.live` to the **speaker only** (self-monitor).
    * Listeners receive phrase-final `transcript.chunk` + TTS during the turn; `turn.stop` may emit a final chunk only when the batch STT adds new tail text beyond streamed phrases.
    */
-  liveCaptions: process.env.LIVE_CAPTIONS === "1" || process.env.LIVE_CAPTIONS === "true",
-  /**
-   * Optional pause (ms) after `turn.stop` before STT resolve → translate → TTS. Gives streaming STT time to settle; e.g. 1000–1500 for JA.
-   * Default 0 for fast dev/tests.
-   */
-  utteranceCommitDelayMs: Math.max(0, Number(process.env.UTTERANCE_COMMIT_DELAY_MS ?? 0) || 0),
-  /**
-   * After last `is_final` Deepgram phrase, brief wait before closing the stream so a trailing final can enqueue. Only used when phrase commits ran during the turn.
-   */
-  streamSegmentSettleMs: Math.max(0, Number(process.env.STREAM_SEGMENT_SETTLE_MS ?? 250) || 0),
-  /**
-   * Live STT only: silence duration (ms) before Deepgram marks an `is_final` phrase. Higher → fewer phrase breaks but later delivery.
-   * 0 = use Deepgram default. Try 500–900 if short pauses (e.g. after questions) split one grammatical sentence.
-   */
-  deepgramLiveEndpointingMs: Math.max(0, Number(process.env.DEEPGRAM_LIVE_ENDPOINTING_MS ?? 0) || 0),
-  /**
-   * When >0, force-commit a rolling stream segment every N ms so long monologues do not stall phrase delivery.
-   * Helps bound latency when Deepgram waits too long to emit `is_final`.
-   */
-  forcedStreamCommitMs: Math.max(0, Number(process.env.FORCED_STREAM_COMMIT_MS ?? 7000) || 0),
-  /**
-   * Minimum character count before a forced segment commit can fire.
-   */
-  forcedStreamCommitMinChars: Math.max(1, Number(process.env.FORCED_STREAM_COMMIT_MIN_CHARS ?? 24) || 24),
-  /**
-   * While merged transcript length is at most this many characters **and** it still has no sentence-ending
-   * punctuation (. ? ! 。), each Deepgram `is_final` phrase is translated as soon as it arrives (“short
-   * utterance”). Once any sentence break appears in the merged text, the server waits for full sentences even
-   * below this length (see `mergedTranscriptHasSentenceBreak` in room-hub).
-   */
-  shortUtteranceMaxChars: Math.max(8, Number(process.env.SHORT_UTTERANCE_MAX_CHARS ?? 120) || 120),
-  /**
-   * Sentence-mode streaming: emit at most this many complete sentences per translation (then wait for more
-   * `is_final` or turn stop). Keeps TTS/translation chunks bounded when STT drops many sentences at once.
-   */
-  streamTranslationMaxSentences: Math.max(1, Number(process.env.STREAM_TRANSLATION_MAX_SENTENCES ?? 2) || 2),
-  /**
-   * Sentence-mode streaming: also cut after this many characters once at least one full sentence was taken
-   * (whichever comes first with max sentences).
-   */
-  streamTranslationMaxChars: Math.max(80, Number(process.env.STREAM_TRANSLATION_MAX_CHARS ?? 280) || 280)
+  liveCaptions: process.env.LIVE_CAPTIONS === "1" || process.env.LIVE_CAPTIONS === "true"
 };
-
