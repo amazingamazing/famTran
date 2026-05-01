@@ -38,6 +38,12 @@ type ActiveTurn = {
   liveDebounce: ReturnType<typeof setTimeout> | null;
   /** Source text already delivered via {@link DgPcmStream} `is_final` phrase commits (normalized join). */
   committedStreamSource: string;
+  /** Merged `is_final` (and optional forced live) text with overlap pruned; used for sentence batching. */
+  streamMergedSource: string;
+  /** Index in {@link streamMergedSource} up to which we have already enqueued translation. */
+  streamEmittedLen: number;
+  /** True once PCM is sent to a live Deepgram stream for this turn (affects end-of-turn flush). */
+  usedPhraseStreaming: boolean;
   /** Serializes phrase-final translate+TTS so order is preserved and completeTurn can await drain. */
   segmentPipeline: Promise<void>;
   forcedCommitTimer: ReturnType<typeof setInterval> | null;
@@ -124,12 +130,115 @@ const dedupeLeadingOverlap = (alreadyCommitted: string, incoming: string): strin
   return sliced;
 };
 
+/** Append a new STT segment onto the rolling merged transcript, stripping prefix overlap (re-finalization / rewrite). */
+const appendStreamSegment = (current: string, incoming: string): string => {
+  const delta = dedupeLeadingOverlap(current, incoming).trim();
+  if (!delta) {
+    return current;
+  }
+  if (!current) {
+    return delta;
+  }
+  return `${current} ${delta}`.trim();
+};
+
+const SENTENCE_END_CHARS = /[.!?。]/;
+
+/**
+ * From `full[start]`, take one or more **complete** sentences (ended by . ? ! or 。), or return empty if the tail
+ * has no sentence end yet. Handles overlap boundaries only inside `full` (caller merges segments).
+ */
+const takeAllCompleteSentencesFrom = (full: string, start: number): { chunk: string; nextStart: number } => {
+  let pos = start;
+  while (pos < full.length && /\s/.test(full[pos])) {
+    pos += 1;
+  }
+  let lastCompleteExclusive = -1;
+  while (pos < full.length) {
+    const rel = full.slice(pos).search(SENTENCE_END_CHARS);
+    if (rel < 0) {
+      break;
+    }
+    const p = pos + rel;
+    const punct = full[p];
+    const prev = full[p - 1];
+    const next = full[p + 1];
+    if (punct === "." && prev !== undefined && /\d/.test(prev) && next !== undefined && /\d/.test(next)) {
+      pos = p + 1;
+      continue;
+    }
+    const isBoundary =
+      next === undefined ||
+      /\s/.test(next) ||
+      next === '"' ||
+      next === "'" ||
+      next === "」" ||
+      next === "）" ||
+      next === "]";
+    if (!isBoundary) {
+      pos = p + 1;
+      continue;
+    }
+    lastCompleteExclusive = p + 1;
+    pos = p + 1;
+    while (pos < full.length && /\s/.test(full[pos])) {
+      pos += 1;
+    }
+  }
+  if (lastCompleteExclusive < start) {
+    return { chunk: "", nextStart: start };
+  }
+  return {
+    chunk: full.slice(start, lastCompleteExclusive).trim(),
+    nextStart: pos
+  };
+};
+
 export class RoomHub {
   /** Everyone in the single family session. */
   private readonly participants = new Map<string, SessionParticipant>();
   private readonly activeTurns = new Map<string, ActiveTurn>();
 
   constructor(private readonly db: AppDb, private readonly providers: ProviderPipeline) {}
+
+  /**
+   * Portion of `full` that is not already covered by streamed `committed` phrases (word-prefix match,
+   * string-prefix, or normalized overlap tail). Matches end-of-turn reconciliation in {@link completeTurn}.
+   */
+  private resolveRemainderAfterCommitted(committedRaw: string, fullRaw: string): string {
+    const committed = committedRaw.trim();
+    const full = fullRaw.trim();
+    if (!full) {
+      return "";
+    }
+    if (!committed) {
+      return full;
+    }
+
+    const cw = turnCanonWords(committed);
+    const fw = turnCanonWords(full);
+    const cCommit = cw.join(" ");
+    const cFull = fw.join(" ");
+
+    if (cFull === cCommit) {
+      return "";
+    }
+
+    const wordMatch = (a: string, b: string) => normalize(a) === normalize(b);
+    if (cw.length > 0 && fw.length >= cw.length && cw.every((w, i) => wordMatch(fw[i] ?? "", w))) {
+      return fw.slice(cw.length).join(" ").trim();
+    }
+    if (full.startsWith(committed)) {
+      let remainder = full.slice(committed.length).trim();
+      remainder = remainder.replace(/^[\s.,;!?、。，]+/u, "").trim();
+      return remainder;
+    }
+    const remainder = dedupeLeadingOverlap(committed, full);
+    if (remainder.length > 0 && remainder !== full) {
+      return remainder;
+    }
+    return full;
+  }
 
   join(socket: WebSocket, event: Extract<ClientEvent, { type: "session.join" }>) {
     const clientId = randomUUID();
@@ -178,6 +287,9 @@ export class RoomHub {
           liveSeq: 0,
           liveDebounce: null,
           committedStreamSource: "",
+          streamMergedSource: "",
+          streamEmittedLen: 0,
+          usedPhraseStreaming: false,
           segmentPipeline: Promise.resolve(),
           forcedCommitTimer: null,
           lastForcedCommitAtMs: Date.now()
@@ -205,6 +317,7 @@ export class RoomHub {
             if (!turn.dgStream) {
               const tId = event.turnId;
               const live = this.shouldLiveCaptions();
+              turn.usedPhraseStreaming = true;
               turn.dgStream = new DgPcmStream(key, turn.sourceLanguage, {
                 endpointingMs:
                   appConfig.deepgramLiveEndpointingMs > 0 ? appConfig.deepgramLiveEndpointingMs : undefined,
@@ -214,7 +327,7 @@ export class RoomHub {
                     }
                   : undefined,
                 onFinalSegment: (segmentText: string) => {
-                  this.queueStreamSegmentCommit({ turnId: tId, segmentText });
+                  this.ingestPhraseFinalSegment({ turnId: tId, segmentText });
                 }
               });
             }
@@ -413,15 +526,22 @@ export class RoomHub {
       return;
     }
 
-    const committed = turn.committedStreamSource.trim();
-    let effectiveSource = fullSourceText;
-    if (committed.length > 0) {
-      const cw = turnCanonWords(committed);
-      const fw = turnCanonWords(fullSourceText);
-      const cCommit = cw.join(" ");
-      const cFull = fw.join(" ");
+    if (turn.usedPhraseStreaming) {
+      turn.streamMergedSource = fullSourceText;
+      const tail = this.resolveRemainderAfterCommitted(turn.committedStreamSource, fullSourceText).trim();
+      if (tail.length > 0) {
+        await turn.segmentPipeline.catch(() => undefined);
+        await this.deliverCommittedPhrase({ turnId, segmentText: tail });
+        await turn.segmentPipeline.catch(() => undefined);
+      }
+      turn.streamEmittedLen = turn.streamMergedSource.length;
+    }
 
-      if (cFull === cCommit) {
+    const committed = turn.committedStreamSource.trim();
+    let effectiveSource = fullSourceText.trim();
+    if (committed.length > 0) {
+      const remainder = this.resolveRemainderAfterCommitted(committed, fullSourceText).trim();
+      if (!remainder) {
         await this.finalizeStreamedTurnDebugOnly({
           turnId,
           turn,
@@ -430,40 +550,7 @@ export class RoomHub {
         });
         return;
       }
-
-      const wordMatch = (a: string, b: string) => normalize(a) === normalize(b);
-      if (cw.length > 0 && fw.length >= cw.length && cw.every((w, i) => wordMatch(fw[i] ?? "", w))) {
-        const remainderWords = fw.slice(cw.length);
-        const remainderJoined = remainderWords.join(" ").trim();
-        if (!remainderJoined) {
-          await this.finalizeStreamedTurnDebugOnly({
-            turnId,
-            turn,
-            fullSourceText,
-            turnTranscription
-          });
-          return;
-        }
-        effectiveSource = remainderJoined;
-      } else if (fullSourceText.startsWith(committed)) {
-        let remainder = fullSourceText.slice(committed.length).trim();
-        remainder = remainder.replace(/^[\s.,;!?、。，]+/u, "").trim();
-        if (remainder.length === 0) {
-          await this.finalizeStreamedTurnDebugOnly({
-            turnId,
-            turn,
-            fullSourceText,
-            turnTranscription
-          });
-          return;
-        }
-        effectiveSource = remainder;
-      } else {
-        const remainder = dedupeLeadingOverlap(committed, fullSourceText);
-        if (remainder.length > 0 && remainder !== fullSourceText) {
-          effectiveSource = remainder;
-        }
-      }
+      effectiveSource = remainder;
     }
 
     const glossaryLines = this.db
@@ -681,12 +768,17 @@ export class RoomHub {
       if (!rolling) {
         return;
       }
-      const delta = dedupeLeadingOverlap(current.committedStreamSource, rolling);
+      const delta = dedupeLeadingOverlap(current.streamMergedSource, rolling).trim();
       if (delta.length < appConfig.forcedStreamCommitMinChars) {
         return;
       }
       current.lastForcedCommitAtMs = now;
-      this.queueStreamSegmentCommit({ turnId, segmentText: delta });
+      current.streamMergedSource = current.streamMergedSource
+        ? `${current.streamMergedSource} ${delta}`.trim()
+        : delta;
+      current.segmentPipeline = current.segmentPipeline
+        .catch(() => undefined)
+        .then(() => this.flushPendingTranslationChunks(turnId));
     }, 1000);
   }
 
@@ -749,18 +841,59 @@ export class RoomHub {
     sendLive(sourceSpeaker, sourceSnapshot);
   }
 
-  private queueStreamSegmentCommit(args: { turnId: string; segmentText: string }) {
+  private ingestPhraseFinalSegment(args: { turnId: string; segmentText: string }) {
     const turn = this.activeTurns.get(args.turnId);
     if (!turn || !this.shouldSttStream()) {
       return;
     }
-    const segment = args.segmentText.trim();
-    if (!segment) {
+    const seg = args.segmentText.trim();
+    if (!seg) {
       return;
     }
+    turn.streamMergedSource = appendStreamSegment(turn.streamMergedSource, seg);
     turn.segmentPipeline = turn.segmentPipeline
       .catch(() => undefined)
-      .then(() => this.deliverCommittedPhrase({ turnId: args.turnId, segmentText: segment }));
+      .then(() => this.flushPendingTranslationChunks(args.turnId));
+  }
+
+  /**
+   * After each merged `is_final` (or forced rolling delta), emit translation for “short” turns immediately,
+   * or for “long” turns only when a sentence-ending marker appears; remainder waits for more finals or
+   * turn stop (see `completeTurn` tail flush).
+   */
+  private async flushPendingTranslationChunks(turnId: string) {
+    const turn = this.activeTurns.get(turnId);
+    if (!turn) {
+      return;
+    }
+    const full = turn.streamMergedSource;
+    if (!full.trim()) {
+      return;
+    }
+    const shortMode = full.length <= appConfig.shortUtteranceMaxChars;
+
+    if (shortMode) {
+      const tail = full.slice(turn.streamEmittedLen);
+      if (!tail.trim()) {
+        return;
+      }
+      await this.deliverCommittedPhrase({ turnId, segmentText: tail.trim() });
+      const t1 = this.activeTurns.get(turnId);
+      if (t1) {
+        t1.streamEmittedLen = full.length;
+      }
+      return;
+    }
+
+    const { chunk, nextStart } = takeAllCompleteSentencesFrom(full, turn.streamEmittedLen);
+    if (!chunk) {
+      return;
+    }
+    await this.deliverCommittedPhrase({ turnId, segmentText: chunk });
+    const t2 = this.activeTurns.get(turnId);
+    if (t2) {
+      t2.streamEmittedLen = nextStart;
+    }
   }
 
   private async deliverCommittedPhrase(args: { turnId: string; segmentText: string }) {
