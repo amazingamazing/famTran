@@ -120,6 +120,25 @@ const turnCanonWords = (s: string): string[] =>
     .split(/\s+/u)
     .filter(Boolean);
 
+/**
+ * Streamed phrase-final commits vs {@link DgPcmStream.close()} often differ by trailing punctuation on the last
+ * token (`world` vs `world.`), which breaks raw {@link turnCanonWords} equality and caused a duplicate full
+ * `transcript.chunk` + TTS at turn end.
+ */
+const streamCommittedMatchesCloseText = (
+  committedRaw: string,
+  closeRaw: string
+): { matches: boolean; canonEq: boolean; normEq: boolean } => {
+  const committed = committedRaw.trim();
+  const closeFull = closeRaw.trim();
+  if (!committed || !closeFull) {
+    return { matches: false, canonEq: false, normEq: false };
+  }
+  const canonEq = turnCanonWords(committed).join(" ") === turnCanonWords(closeFull).join(" ");
+  const normEq = normalize(committed) === normalize(closeFull);
+  return { matches: canonEq || normEq, canonEq, normEq };
+};
+
 const dedupeLeadingOverlap = (alreadyCommitted: string, incoming: string): string => {
   const committedWords = normalize(alreadyCommitted).split(" ").filter(Boolean);
   const incomingWordsRaw = incoming.trim().split(/\s+/).filter(Boolean);
@@ -372,6 +391,10 @@ export class RoomHub {
     }
     if (!committed) {
       return full;
+    }
+
+    if (normalize(committed) === normalize(full)) {
+      return "";
     }
 
     const cw = turnCanonWords(committed);
@@ -704,26 +727,37 @@ export class RoomHub {
     }
 
     const committed = turn.committedStreamSource.trim();
-    let effectiveSource = fullSourceText.trim();
+    const fullTrim = fullSourceText.trim();
+    let effectiveSource = fullTrim;
     if (committed.length > 0) {
-      const cKey = turnCanonWords(committed).join(" ");
-      const fKey = turnCanonWords(fullSourceText).join(" ");
-      if (cKey === fKey) {
+      const reconcile = streamCommittedMatchesCloseText(committed, fullTrim);
+      if (reconcile.matches) {
         await this.finalizeStreamedTurnDebugOnly({
           turnId,
           turn,
           fullSourceText,
-          turnTranscription
+          turnTranscription,
+          reconcile: {
+            committedCanonKeyEqClose: reconcile.canonEq,
+            committedNormEqClose: reconcile.normEq,
+            exitReason: reconcile.canonEq ? "canon_key_match" : "norm_key_match"
+          }
         });
         return;
       }
-      const remainder = this.resolveRemainderAfterCommitted(committed, fullSourceText).trim();
+      const remainder = this.resolveRemainderAfterCommitted(committed, fullTrim).trim();
       if (!remainder) {
+        const again = streamCommittedMatchesCloseText(committed, fullTrim);
         await this.finalizeStreamedTurnDebugOnly({
           turnId,
           turn,
           fullSourceText,
-          turnTranscription
+          turnTranscription,
+          reconcile: {
+            committedCanonKeyEqClose: again.canonEq,
+            committedNormEqClose: again.normEq,
+            exitReason: "empty_remainder"
+          }
         });
         return;
       }
@@ -1238,6 +1272,11 @@ export class RoomHub {
     turn: ActiveTurn;
     fullSourceText: string;
     turnTranscription: TranscribeForTurnOutput;
+    reconcile?: {
+      committedCanonKeyEqClose: boolean;
+      committedNormEqClose: boolean;
+      exitReason: "canon_key_match" | "norm_key_match" | "empty_remainder";
+    };
   }) {
     const sourceSpeaker = this.participants.get(args.turn.speakerId);
     if (!sourceSpeaker) {
@@ -1273,7 +1312,8 @@ export class RoomHub {
         detail: transcription.detail,
         audioChunkCount: args.turn.audioChunks.length,
         textHintCount: args.turn.textChunks.length,
-        sttBenchmark: args.turnTranscription.sttBenchmark
+        sttBenchmark: args.turnTranscription.sttBenchmark,
+        reconcile: args.reconcile
       },
       participants: participantDebugRows
     });

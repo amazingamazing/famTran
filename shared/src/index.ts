@@ -100,6 +100,15 @@ export type ServerEvent =
         textHintCount: number;
         /** Set when server STT_BENCHMARK=1: parallel model timings and preview text. */
         sttBenchmark?: SttBenchmarkRow[];
+        /**
+         * Phrase-stream turns only: why the server skipped a full-utterance `transcript.chunk` replay at turn end
+         * (avoids duplicate delivery when close() text differs only by punctuation/casing from streamed finals).
+         */
+        reconcile?: {
+          committedCanonKeyEqClose: boolean;
+          committedNormEqClose: boolean;
+          exitReason: "canon_key_match" | "norm_key_match" | "empty_remainder";
+        };
       };
       participants: Array<{
         clientId: string;
