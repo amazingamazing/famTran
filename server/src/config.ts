@@ -29,5 +29,17 @@ export const appConfig = {
    * When true (with sttStream + Deepgram), debounced interim STT is sent as `transcript.live` to the **speaker only** (self-monitor).
    * Listeners receive phrase-final `transcript.chunk` + TTS during the turn; `turn.stop` may emit a final chunk only when the batch STT adds new tail text beyond streamed phrases.
    */
-  liveCaptions: process.env.LIVE_CAPTIONS === "1" || process.env.LIVE_CAPTIONS === "true"
+  liveCaptions: process.env.LIVE_CAPTIONS === "1" || process.env.LIVE_CAPTIONS === "true",
+  /**
+   * Silence (ms) Deepgram waits before emitting `is_final` for a phrase. Higher values reduce spurious finals during
+   * brief pauses mid-sentence. Set `DEEPGRAM_ENDPOINTING_MS=0` to omit the query param (Deepgram default).
+   */
+  deepgramEndpointingMs: (() => {
+    const raw = process.env.DEEPGRAM_ENDPOINTING_MS;
+    if (raw === undefined || raw === "") {
+      return 450;
+    }
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : 450;
+  })()
 };

@@ -10,12 +10,9 @@ import { DgPcmStream } from "./deepgram-stream.js";
 const STREAM = {
   utteranceCommitDelayMs: 0,
   streamSegmentSettleMs: 250,
-  /** 0 = use Deepgram default for end-of-phrase silence. */
-  deepgramLiveEndpointingMs: 0,
   /** 0 = disabled. Non-zero forces rolling text into the merge on a timer (can interact badly with sentence batching). */
   forcedStreamCommitMs: 0,
   forcedStreamCommitMinChars: 24,
-  shortUtteranceMaxChars: 120,
   streamTranslationMaxSentences: 2,
   streamTranslationMaxChars: 280
 } as const;
@@ -345,33 +342,6 @@ const takeBoundedCompleteSentencesFrom = (
   };
 };
 
-/** True if merged text has at least one probable sentence end (same boundary rules as `takeAllCompleteSentencesFrom`). */
-const mergedTranscriptHasSentenceBreak = (full: string): boolean => {
-  for (let i = 0; i < full.length; i++) {
-    const c = full[i];
-    if (!SENTENCE_END_CHARS.test(c)) {
-      continue;
-    }
-    const prevCh = i > 0 ? full[i - 1] : "";
-    const nextCh = full[i + 1];
-    if (c === "." && /\d/.test(prevCh) && nextCh !== undefined && /\d/.test(nextCh)) {
-      continue;
-    }
-    const isBoundary =
-      nextCh === undefined ||
-      /\s/.test(nextCh) ||
-      nextCh === '"' ||
-      nextCh === "'" ||
-      nextCh === "」" ||
-      nextCh === "）" ||
-      nextCh === "]";
-    if (isBoundary) {
-      return true;
-    }
-  }
-  return false;
-};
-
 export class RoomHub {
   /** Everyone in the single family session. */
   private readonly participants = new Map<string, SessionParticipant>();
@@ -502,7 +472,7 @@ export class RoomHub {
               turn.usedPhraseStreaming = true;
               turn.dgStream = new DgPcmStream(key, turn.sourceLanguage, {
                 endpointingMs:
-                  STREAM.deepgramLiveEndpointingMs > 0 ? STREAM.deepgramLiveEndpointingMs : undefined,
+                  appConfig.deepgramEndpointingMs > 0 ? appConfig.deepgramEndpointingMs : undefined,
                 onTranscript: live
                   ? (sourceText: string) => {
                       this.scheduleLiveCaption({ turnId: tId, sourceText });
@@ -1076,14 +1046,14 @@ export class RoomHub {
   }
 
   /**
-   * After each merged `is_final` (or forced rolling delta), emit translation for “short” turns immediately,
-   * or for “long” turns only when a sentence-ending marker appears; remainder waits for more finals or
-   * turn stop (see `completeTurn` tail flush).
+   * After each merged `is_final` (or forced rolling delta), emit translation only at **sentence boundaries**
+   * (`.?!。`) or whatever fits in {@link takeBoundedCompleteSentencesFrom}. Text after the last boundary stays
+   * buffered until more audio yields a boundary or {@link completeTurn} flushes the tail.
    *
-   * Short mode only applies while the merged transcript is still tiny **and** has no sentence-ending punctuation
-   * yet. Once the stream contains something like “First sentence.” we switch to sentence batching even if the
-   * character count is still below the `STREAM.shortUtteranceMaxChars` cap, so Deepgram phrase finals mid-clause
-   * do not get translated early (e.g. “…the shame” vs “cone…”).
+   * We intentionally **do not** emit on every Deepgram phrase final when there is no sentence end yet: brief
+   * pauses still produce `is_final`, which would otherwise translate/TTS incomplete clauses (“…but maybe”) before
+   * the speaker continues. Tune {@link appConfig.deepgramEndpointingMs} / `DEEPGRAM_ENDPOINTING_MS` to change how
+   * long a silence must be before Deepgram closes a phrase.
    */
   private async flushPendingTranslationChunks(turnId: string) {
     const turn = this.activeTurns.get(turnId);
@@ -1092,21 +1062,6 @@ export class RoomHub {
     }
     const full = turn.streamMergedSource;
     if (!full.trim()) {
-      return;
-    }
-    const shortMode =
-      full.length <= STREAM.shortUtteranceMaxChars && !mergedTranscriptHasSentenceBreak(full);
-
-    if (shortMode) {
-      const tail = full.slice(turn.streamEmittedLen);
-      if (!tail.trim()) {
-        return;
-      }
-      await this.deliverCommittedPhrase({ turnId, segmentText: tail.trim() });
-      const t1 = this.activeTurns.get(turnId);
-      if (t1) {
-        t1.streamEmittedLen = full.length;
-      }
       return;
     }
 
