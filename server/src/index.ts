@@ -10,7 +10,7 @@ import { z } from "zod";
 import { appConfig } from "./config.js";
 import { AppDb } from "./db.js";
 import { InMemoryProviderPipeline } from "./providers.js";
-import { RoomHub } from "./room-hub.js";
+import { SessionHub } from "./session-hub.js";
 
 const resolveClientDistPath = () => {
   const cwdCandidate = path.resolve(process.cwd(), "client", "dist");
@@ -39,7 +39,7 @@ const boot = async () => {
     cartesiaModelId: appConfig.models.cartesia,
     openAiApiKey: appConfig.apiKeys.openAi
   });
-  const roomHub = new RoomHub(db, providers);
+  const sessionHub = new SessionHub(db, providers);
 
   app.get("/health", async () => ({ ok: true }));
 
@@ -113,13 +113,13 @@ const boot = async () => {
       try {
         const event = JSON.parse(data.toString()) as { type: string };
         if (event.type === "session.join") {
-          clientId = roomHub.join(socket, event as never);
+          clientId = sessionHub.join(socket, event as never);
           return;
         }
         if (!clientId) {
           return;
         }
-        await roomHub.handleEvent(clientId, event as never);
+        await sessionHub.handleEvent(clientId, event as never);
       } catch {
         socket.send(JSON.stringify({ type: "error", message: "Invalid client event payload" }));
       }
@@ -127,7 +127,7 @@ const boot = async () => {
 
     socket.on("close", () => {
       if (clientId) {
-        roomHub.leave(clientId);
+        sessionHub.leave(clientId);
       }
     });
   });

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Family Translation">
+  <rect width="512" height="512" rx="96" fill="#111827"/>
+  <path fill="#38bdf8" d="M128 176c0-35.3 28.7-64 64-64h48c35.3 0 64 28.7 64 64v16c0 35.3-28.7 64-64 64h-48c-35.3 0-64-28.7-64-64v-16z"/>
+  <path fill="#a7f3d0" d="M272 272c0-35.3 28.7-64 64-64h48c35.3 0 64 28.7 64 64v16c0 35.3-28.7 64-64 64h-48c-35.3 0-64-28.7-64-64v-16z"/>
+  <text x="256" y="420" text-anchor="middle" font-family="system-ui,sans-serif" font-size="120" font-weight="700" fill="#e5e7eb">A”B</text>
+</svg>

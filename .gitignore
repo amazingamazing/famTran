@@ -19,5 +19,9 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Accidental TypeScript emit under shared/tests (vitest uses .ts sources only)
+shared/tests/**/*.js
+shared/tests/**/*.d.ts
+
 # Local planning artifacts not needed in repo history
 family translation app plan.pdf

@@ -342,7 +342,7 @@ const takeBoundedCompleteSentencesFrom = (
   };
 };
 
-export class RoomHub {
+export class SessionHub {
   /** Everyone in the single family session. */
   private readonly participants = new Map<string, SessionParticipant>();
   private readonly activeTurns = new Map<string, ActiveTurn>();

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AppDb } from "../src/db.js";
 import { InMemoryProviderPipeline } from "../src/providers.js";
-import { RoomHub } from "../src/room-hub.js";
+import { SessionHub } from "../src/session-hub.js";
 
 class MockSocket {
   OPEN = 1;
@@ -35,15 +35,15 @@ class WavTtsPipeline extends InMemoryProviderPipeline {
   }
 }
 
-describe("RoomHub", () => {
+describe("SessionHub", () => {
   let dbDir = "";
   let db: AppDb;
-  let hub: RoomHub;
+  let hub: SessionHub;
 
   beforeEach(() => {
     dbDir = mkdtempSync(join(tmpdir(), "family-translation-test-"));
     db = new AppDb(join(dbDir, "app.sqlite"));
-    hub = new RoomHub(
+    hub = new SessionHub(
       db,
       new InMemoryProviderPipeline({
         stt: "deepgram",
@@ -285,7 +285,7 @@ describe("RoomHub", () => {
   });
 
   it("sends transcript before delayed tts audio is ready", async () => {
-    hub = new RoomHub(
+    hub = new SessionHub(
       db,
       new SlowTtsPipeline({
         stt: "deepgram",
@@ -404,7 +404,7 @@ describe("RoomHub", () => {
   });
 
   it("forwards synthesized audio mime type to clients", async () => {
-    hub = new RoomHub(
+    hub = new SessionHub(
       db,
       new WavTtsPipeline({
         stt: "deepgram",

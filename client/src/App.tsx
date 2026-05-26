@@ -4,6 +4,7 @@ import type { ProviderType, ServerEvent, SupportedLanguage } from "@family-trans
 import "./App.css";
 import { appStrings } from "./lib/app-strings";
 import { audioPayloadToObjectUrl } from "./lib/audio-playback";
+import { startMicCapture, type MicCaptureHandle } from "./lib/mic-capture";
 import { parseEvent } from "./lib/parse-event";
 import {
   getOrCreateGlossaryUserId,
@@ -321,41 +322,6 @@ const initialProviderTranslation: ProviderType = cookieProviderTranslation === "
 const cookieProviderTts = getCookie("family_translation_provider_tts");
 const initialProviderTts: ProviderType = cookieProviderTts === "openai" ? "openai" : "cartesia";
 
-const downsampleTo16k = (input: Float32Array, inputSampleRate: number): Float32Array => {
-  if (inputSampleRate === 16000) {
-    return input;
-  }
-  const ratio = inputSampleRate / 16000;
-  const outputLength = Math.round(input.length / ratio);
-  const output = new Float32Array(outputLength);
-  let outputIndex = 0;
-  let inputIndex = 0;
-
-  while (outputIndex < outputLength) {
-    const nextInputIndex = Math.round((outputIndex + 1) * ratio);
-    let accumulator = 0;
-    let count = 0;
-    for (let index = inputIndex; index < nextInputIndex && index < input.length; index += 1) {
-      accumulator += input[index];
-      count += 1;
-    }
-    output[outputIndex] = count > 0 ? accumulator / count : 0;
-    outputIndex += 1;
-    inputIndex = nextInputIndex;
-  }
-
-  return output;
-};
-
-const floatToPcm16 = (input: Float32Array): Int16Array => {
-  const output = new Int16Array(input.length);
-  for (let i = 0; i < input.length; i += 1) {
-    const sample = Math.max(-1, Math.min(1, input[i]));
-    output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-  }
-  return output;
-};
-
 const uint8ToBase64 = (bytes: Uint8Array): string => {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 1) {
@@ -374,10 +340,7 @@ function App() {
   const autoPilotEnabledRef = useRef(false);
   const debugEventsRef = useRef<string[]>([]);
   const debugTurnsRef = useRef<DebugTurnRow[]>([]);
-  const micStreamRef = useRef<MediaStream | null>(null);
-  const micAudioContextRef = useRef<AudioContext | null>(null);
-  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const micCaptureRef = useRef<MicCaptureHandle | null>(null);
   const micTurnIdRef = useRef<string | null>(null);
   const micSequenceRef = useRef(0);
   const autoConnectAttemptedRef = useRef(false);
@@ -454,10 +417,10 @@ function App() {
     setShowJumpToLatest(!pinned && scrollable);
   }, []);
 
-  const addDebugEvent = (message: string) => {
+  const addDebugEvent = useCallback((message: string) => {
     const entry = `${new Date().toISOString()} ${message}`;
     debugEventsRef.current = [entry, ...debugEventsRef.current].slice(0, MAX_DEBUG_EVENTS);
-  };
+  }, []);
 
   const clearAutoPilotTimer = () => {
     if (autopilotTimeoutRef.current !== null) {
@@ -543,7 +506,7 @@ function App() {
     }
   };
 
-  const unlockPlaybackAudio = async () => {
+  const unlockPlaybackAudio = useCallback(async () => {
     if (playbackUnlocked && playbackAudioRef.current) {
       return;
     }
@@ -570,7 +533,7 @@ function App() {
     } catch {
       addDebugEvent("audio.unlock.failed");
     }
-  };
+  }, [addDebugEvent, playbackUnlocked]);
 
   useEffect(() => {
     const onOnline = () => setNetworkOnline(true);
@@ -742,7 +705,7 @@ function App() {
     } catch {
       addDebugEvent("permissions.warmup.failed");
     }
-  }, [unlockPlaybackAudio]);
+  }, [addDebugEvent, unlockPlaybackAudio]);
 
   const completeOnboardingWithName = async () => {
     const name = onboardingNameDraft.trim();
@@ -1040,7 +1003,7 @@ function App() {
     autoConnectAttemptedRef.current = true;
     addDebugEvent("session.auto_connect.attempt");
     connectRef.current();
-  }, [connected, displayName]);
+  }, [addDebugEvent, connected, displayName]);
 
   const disconnect = () => {
     clearAutoPilotTimer();
@@ -1056,17 +1019,10 @@ function App() {
       return;
     }
 
-    micProcessorRef.current?.disconnect();
-    micSourceRef.current?.disconnect();
-    micProcessorRef.current = null;
-    micSourceRef.current = null;
-
-    micStreamRef.current?.getTracks().forEach((track) => track.stop());
-    micStreamRef.current = null;
-
-    if (micAudioContextRef.current) {
-      await micAudioContextRef.current.close();
-      micAudioContextRef.current = null;
+    const capture = micCaptureRef.current;
+    micCaptureRef.current = null;
+    if (capture) {
+      await capture.stop();
     }
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && micTurnIdRef.current) {
@@ -1101,19 +1057,6 @@ function App() {
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
-
-      const audioContext = new AudioContext();
-      const source = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
-
       const turnId = createTurnId();
       micTurnIdRef.current = turnId;
       micSequenceRef.current = 0;
@@ -1126,36 +1069,29 @@ function App() {
         })
       );
 
-      processor.onaudioprocess = (event) => {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !micTurnIdRef.current) {
-          return;
+      const wsForChunks = wsRef.current;
+
+      const capture = await startMicCapture({
+        onPcmChunk: (pcm16) => {
+          if (!wsForChunks || wsForChunks.readyState !== WebSocket.OPEN || !micTurnIdRef.current) {
+            return;
+          }
+          wsForChunks.send(
+            JSON.stringify({
+              type: "audio.input",
+              turnId: micTurnIdRef.current,
+              payloadBase64: uint8ToBase64(new Uint8Array(pcm16.buffer)),
+              sequence: micSequenceRef.current,
+              isLast: false
+            })
+          );
+          micSequenceRef.current += 1;
         }
-        const input = event.inputBuffer.getChannelData(0);
-        const downsampled = downsampleTo16k(input, audioContext.sampleRate);
-        const pcm16 = floatToPcm16(downsampled);
-        const payloadBase64 = uint8ToBase64(new Uint8Array(pcm16.buffer));
+      });
 
-        wsRef.current.send(
-          JSON.stringify({
-            type: "audio.input",
-            turnId: micTurnIdRef.current,
-            payloadBase64,
-            sequence: micSequenceRef.current,
-            isLast: false
-          })
-        );
-        micSequenceRef.current += 1;
-      };
-
-      source.connect(processor);
-      processor.connect(audioContext.destination);
-
-      micStreamRef.current = stream;
-      micAudioContextRef.current = audioContext;
-      micSourceRef.current = source;
-      micProcessorRef.current = processor;
+      micCaptureRef.current = capture;
       setMicTestActive(true);
-      addDebugEvent(`mic.start turn=${turnId} sampleRate=${audioContext.sampleRate}`);
+      addDebugEvent(`mic.start turn=${turnId} sampleRate=${capture.sampleRate} worklet=pcm-capture-processor`);
     } catch {
       setStatusMessage(S.statusMicFailed);
       addDebugEvent("mic.start.failed");
