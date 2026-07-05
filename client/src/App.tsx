@@ -7,9 +7,13 @@ import { audioPayloadToObjectUrl } from "./lib/audio-playback";
 import { startMicCapture, type MicCaptureHandle } from "./lib/mic-capture";
 import { parseEvent } from "./lib/parse-event";
 import {
+  canStartMicCapture,
   getOrCreateGlossaryUserId,
+  isMicStopNoOp,
+  MIC_STOP_GRACE_MS,
   ONBOARDING_DONE_COOKIE,
-  shouldAutoConnectFromSavedSession
+  shouldAutoConnectFromSavedSession,
+  shouldRunMicStop
 } from "./lib/session-ui";
 
 type HistoryApiMessage = {
@@ -343,9 +347,11 @@ function App() {
   const micCaptureRef = useRef<MicCaptureHandle | null>(null);
   const micTurnIdRef = useRef<string | null>(null);
   const micSequenceRef = useRef(0);
+  const micFinishingRef = useRef(false);
+  const micStopGraceTimerRef = useRef<number | null>(null);
   const autoConnectAttemptedRef = useRef(false);
   const connectRef = useRef<() => void>(() => undefined);
-  const stopMicTestRef = useRef<() => Promise<void>>(async () => {});
+  const stopMicTestRef = useRef<(opts?: { immediate?: boolean }) => Promise<void>>(async () => {});
   const onboardingDoneInit = getCookie(ONBOARDING_DONE_COOKIE) === "true";
   const [onboardingDone, setOnboardingDone] = useState(onboardingDoneInit);
   const [onboardingStep, setOnboardingStep] = useState<0 | 1 | 2>(0);
@@ -392,6 +398,7 @@ function App() {
   const [autoPilotRuns, setAutoPilotRuns] = useState(0);
   const [nextAutoDelaySeconds, setNextAutoDelaySeconds] = useState<number | null>(null);
   const [micTestActive, setMicTestActive] = useState(false);
+  const [micFinishing, setMicFinishing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -549,6 +556,17 @@ function App() {
   useEffect(
     () => () => {
       clearAutoPilotTimer();
+    },
+    []
+  );
+
+  useEffect(
+    () => () => {
+      if (micStopGraceTimerRef.current !== null) {
+        window.clearTimeout(micStopGraceTimerRef.current);
+        micStopGraceTimerRef.current = null;
+      }
+      void stopMicTestRef.current({ immediate: true });
     },
     []
   );
@@ -979,7 +997,7 @@ function App() {
       clearAutoPilotTimer();
       autoPilotEnabledRef.current = false;
       setAutoPilotEnabled(false);
-      void stopMicTestRef.current();
+      void stopMicTestRef.current({ immediate: true });
     };
 
     ws.onerror = () => {
@@ -1009,16 +1027,19 @@ function App() {
     clearAutoPilotTimer();
     autoPilotEnabledRef.current = false;
     setAutoPilotEnabled(false);
-    void stopMicTest();
+    void stopMicTest({ immediate: true });
     wsRef.current?.close();
     wsRef.current = null;
   };
 
-  const stopMicTest = async () => {
-    if (!micTestActive && !micTurnIdRef.current) {
-      return;
+  const clearMicStopGraceTimer = () => {
+    if (micStopGraceTimerRef.current !== null) {
+      window.clearTimeout(micStopGraceTimerRef.current);
+      micStopGraceTimerRef.current = null;
     }
+  };
 
+  const tearDownMicCapture = async () => {
     const capture = micCaptureRef.current;
     micCaptureRef.current = null;
     if (capture) {
@@ -1036,7 +1057,42 @@ function App() {
 
     addDebugEvent(`mic.stop turn=${micTurnIdRef.current ?? "n/a"}`);
     micTurnIdRef.current = null;
+    micFinishingRef.current = false;
+    setMicFinishing(false);
     setMicTestActive(false);
+  };
+
+  const stopMicTest = async (options?: { immediate?: boolean }) => {
+    const immediate = options?.immediate ?? false;
+
+    if (
+      !shouldRunMicStop({
+        micTestActive,
+        micTurnId: micTurnIdRef.current,
+        micFinishing: micFinishingRef.current
+      })
+    ) {
+      return;
+    }
+
+    if (isMicStopNoOp({ micFinishing: micFinishingRef.current, immediate })) {
+      return;
+    }
+
+    if (immediate) {
+      clearMicStopGraceTimer();
+      await tearDownMicCapture();
+      return;
+    }
+
+    micFinishingRef.current = true;
+    setMicFinishing(true);
+    addDebugEvent(`mic.stop.requested turn=${micTurnIdRef.current ?? "n/a"}`);
+    clearMicStopGraceTimer();
+    micStopGraceTimerRef.current = window.setTimeout(() => {
+      micStopGraceTimerRef.current = null;
+      void tearDownMicCapture();
+    }, MIC_STOP_GRACE_MS);
   };
 
   useEffect(() => {
@@ -1052,7 +1108,7 @@ function App() {
       setStatusMessage(S.micEnableFirst);
       return;
     }
-    if (micTestActive) {
+    if (!canStartMicCapture({ micTestActive, micFinishing: micFinishingRef.current })) {
       return;
     }
 
@@ -1095,7 +1151,7 @@ function App() {
     } catch {
       setStatusMessage(S.statusMicFailed);
       addDebugEvent("mic.start.failed");
-      await stopMicTest();
+      await stopMicTest({ immediate: true });
     }
   };
 
@@ -1483,18 +1539,21 @@ function App() {
       </section>
 
       <div
-        className={`pttDock ${!connected ? "pttDockDisabled" : ""} ${micTestActive ? "pttDockRecording" : "pttDockIdle"}`}
+        className={`pttDock ${!connected ? "pttDockDisabled" : micFinishing ? "pttDockFinishing" : micTestActive ? "pttDockRecording" : "pttDockIdle"}`}
         role="button"
-        tabIndex={connected ? 0 : -1}
+        tabIndex={connected && !micFinishing ? 0 : -1}
         onClick={() => {
           if (!connected) {
             setMenuOpen(true);
             return;
           }
+          if (micFinishing) {
+            return;
+          }
           void togglePtt();
         }}
         onKeyDown={(event) => {
-          if (!connected) {
+          if (!connected || micFinishing) {
             return;
           }
           if (event.key === "Enter" || event.key === " ") {
@@ -1504,7 +1563,7 @@ function App() {
         }}
       >
         <p className="pttMainLabel">
-          {!connected ? S.pttDisabled : micTestActive ? S.pttRecording : S.pttReady}
+          {!connected ? S.pttDisabled : micFinishing ? S.pttFinishing : micTestActive ? S.pttRecording : S.pttReady}
         </p>
         {liveCaption && micTestActive ? (
           <p className="pttLiveDraft" aria-live="polite">

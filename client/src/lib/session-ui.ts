@@ -54,3 +54,17 @@ export const writeControlsExpandedPreference = (
   }
   storage.setItem(CONTROLS_EXPANDED_STORAGE_KEY, expanded ? "true" : "false");
 };
+
+export const MIC_STOP_GRACE_MS = 500;
+
+export const canStartMicCapture = (args: { micTestActive: boolean; micFinishing: boolean }) =>
+  !args.micTestActive && !args.micFinishing;
+
+export const shouldRunMicStop = (args: {
+  micTestActive: boolean;
+  micTurnId: string | null;
+  micFinishing: boolean;
+}) => args.micTestActive || args.micTurnId !== null;
+
+export const isMicStopNoOp = (args: { micFinishing: boolean; immediate: boolean }) =>
+  args.micFinishing && !args.immediate;

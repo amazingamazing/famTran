@@ -80,6 +80,7 @@ export type AppCopy = {
   drawerClose: string;
   pttReady: string;
   pttRecording: string;
+  pttFinishing: string;
   pttDisabled: string;
   loadingHistory: string;
   loadingOlder: string;
@@ -188,6 +189,7 @@ const EN: AppCopy = {
   drawerClose: "Close",
   pttReady: "Tap to speak — green means you can start",
   pttRecording: "Tap to stop — recording",
+  pttFinishing: "Finishing…",
   pttDisabled: "Connect in the menu before speaking",
   loadingHistory: "Loading conversation…",
   loadingOlder: "Loading older messages…",
@@ -299,6 +301,7 @@ const JA: AppCopy = {
   drawerClose: "閉じる",
   pttReady: "タップして話す — 緑のときに開始できます",
   pttRecording: "タップして停止 — 録音中",
+  pttFinishing: "終了中…",
   pttDisabled: "話す前にメニューから接続してください",
   loadingHistory: "会話を読み込み中…",
   loadingOlder: "古いメッセージを読み込み中…",

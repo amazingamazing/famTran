@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  canStartMicCapture,
   GLOSSARY_USER_ID_COOKIE,
   getOrCreateGlossaryUserId,
+  isMicStopNoOp,
+  MIC_STOP_GRACE_MS,
   readControlsExpandedPreference,
   shouldAutoConnectFromSavedSession,
+  shouldRunMicStop,
   writeControlsExpandedPreference
 } from "./session-ui";
 
@@ -59,6 +63,35 @@ describe("session-ui helpers", () => {
     writeControlsExpandedPreference(storage, true);
 
     expect(setItem).toHaveBeenCalledWith("family_translation_controls_expanded", "true");
+  });
+
+  it("defines mic stop grace duration", () => {
+    expect(MIC_STOP_GRACE_MS).toBe(500);
+  });
+
+  it("blocks mic capture start while recording or finishing", () => {
+    expect(canStartMicCapture({ micTestActive: false, micFinishing: false })).toBe(true);
+    expect(canStartMicCapture({ micTestActive: true, micFinishing: false })).toBe(false);
+    expect(canStartMicCapture({ micTestActive: false, micFinishing: true })).toBe(false);
+    expect(canStartMicCapture({ micTestActive: true, micFinishing: true })).toBe(false);
+  });
+
+  it("runs mic stop when active, finishing, or turn id remains", () => {
+    expect(
+      shouldRunMicStop({ micTestActive: true, micTurnId: "turn-1", micFinishing: false })
+    ).toBe(true);
+    expect(
+      shouldRunMicStop({ micTestActive: false, micTurnId: "turn-1", micFinishing: false })
+    ).toBe(true);
+    expect(
+      shouldRunMicStop({ micTestActive: false, micTurnId: null, micFinishing: false })
+    ).toBe(false);
+  });
+
+  it("treats double stop during grace as no-op unless immediate", () => {
+    expect(isMicStopNoOp({ micFinishing: true, immediate: false })).toBe(true);
+    expect(isMicStopNoOp({ micFinishing: true, immediate: true })).toBe(false);
+    expect(isMicStopNoOp({ micFinishing: false, immediate: false })).toBe(false);
   });
 
   it("returns stable glossary user id from cookie storage", () => {

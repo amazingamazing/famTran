@@ -59,4 +59,32 @@ describe("DgPcmStream", () => {
 
     expect(rolling).toEqual(["A", "A B"]);
   });
+
+  it("includes endpointing and utterance_end_ms in websocket URL", () => {
+    const stream = new DgPcmStream("test-key", "ja", {
+      endpointingMs: 650,
+      utteranceEndMs: 1400
+    });
+    const url = (stream as unknown as { buildUrl: () => string }).buildUrl();
+    expect(url).toContain("model=nova-3");
+    expect(url).toContain("language=ja");
+    expect(url).toContain("endpointing=650");
+    expect(url).toContain("utterance_end_ms=1400");
+  });
+
+  it("invokes utterance-end callback on UtteranceEnd messages", () => {
+    const events: number[] = [];
+    const stream = new DgPcmStream("test-key", "en", {
+      onUtteranceEnd: (lastWordEndSec) => events.push(lastWordEndSec)
+    });
+    (stream as unknown as { onMessage: (d: Buffer) => void }).onMessage(
+      Buffer.from(
+        JSON.stringify({
+          type: "UtteranceEnd",
+          last_word_end: 12.34
+        })
+      )
+    );
+    expect(events).toEqual([12.34]);
+  });
 });

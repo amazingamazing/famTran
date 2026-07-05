@@ -688,6 +688,14 @@ button.onboardingPrimary {
   border-color: #d94a4a;
 }
 
+.pttDockFinishing {
+  background: linear-gradient(180deg, #6b2323 0%, #8f2020 100%);
+  border-color: #d94a4a;
+  opacity: 0.82;
+  pointer-events: none;
+  cursor: default;
+}
+
 .pttDockDisabled {
   background: #2a313c;
   border-color: #414b5c;
