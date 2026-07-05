@@ -1,6 +1,18 @@
 import { appConfig } from "./config.js";
 import type { SttBenchmarkRow, SupportedLanguage } from "@family-translation/shared";
 
+export const isGemini3FamilyModel = (model: string) => model.startsWith("gemini-3");
+
+export const buildGeminiGenerateContentBody = (prompt: string, model: string) => {
+  const body: Record<string, unknown> = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }]
+  };
+  if (isGemini3FamilyModel(model)) {
+    body.generationConfig = { thinkingConfig: { thinkingLevel: "minimal" } };
+  }
+  return body;
+};
+
 export type ProviderSelection = {
   stt: "deepgram" | "openai";
   translation: "gemini" | "openai";
@@ -318,25 +330,22 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
         `Text: ${args.sourceText}`
       ].join("\n");
 
-      const modelsToTry = [this.secrets.geminiModel ?? "gemini-2.5-flash", "gemini-2.0-flash"];
+      const modelsToTry = [this.secrets.geminiModel ?? "gemini-3.1-flash-lite", "gemini-2.5-flash"];
       let geminiFailureDetail = "unknown";
       for (const model of modelsToTry) {
-        let lastStatus = 0;
         let lastDetail = "";
         for (let attempt = 1; attempt <= 3; attempt += 1) {
           try {
+            const t0 = Date.now();
             const response = await fetch(
               `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.secrets.geminiApiKey}`,
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  contents: [{ role: "user", parts: [{ text: prompt }] }]
-                })
+                body: JSON.stringify(buildGeminiGenerateContentBody(prompt, model))
               }
             );
             if (!response.ok) {
-              lastStatus = response.status;
               const responseText = await response.text();
               lastDetail = `model=${model} status=${response.status} body=${responseText.slice(0, 180)}`;
               geminiFailureDetail = lastDetail;
@@ -352,7 +361,7 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
             };
             const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
             if (text) {
-              return { value: text, path: `translation.gemini_api:${model}` };
+              return { value: text, path: `translation.gemini_api:${model}:${Date.now() - t0}ms` };
             }
             lastDetail = `model=${model} empty_candidate`;
             geminiFailureDetail = lastDetail;
@@ -401,15 +410,17 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
   async synthesizeSpeech(args: SynthInput): Promise<SynthesisResult> {
     if (this.providers.tts === "cartesia" && this.secrets.cartesiaApiKey) {
       try {
+        const modelId = this.secrets.cartesiaModelId ?? "sonic-3.5";
+        const t0 = Date.now();
         const response = await fetch("https://api.cartesia.ai/tts/bytes", {
           method: "POST",
           headers: {
             "X-API-Key": this.secrets.cartesiaApiKey,
             "Content-Type": "application/json",
-            "Cartesia-Version": "2024-06-10"
+            "Cartesia-Version": "2026-03-01"
           },
           body: JSON.stringify({
-            model_id: this.secrets.cartesiaModelId ?? "sonic-2",
+            model_id: modelId,
             transcript: args.text,
             language: args.targetLanguage === "ja" ? "ja" : "en",
             output_format: {
@@ -425,7 +436,11 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
         });
         if (response.ok) {
           const bytes = new Uint8Array(await response.arrayBuffer());
-          return { value: Buffer.from(bytes).toString("base64"), path: "tts.cartesia_api", mimeType: "audio/pcm" };
+          return {
+            value: Buffer.from(bytes).toString("base64"),
+            path: `tts.cartesia_api:${modelId}:${Date.now() - t0}ms`,
+            mimeType: "audio/pcm"
+          };
         }
         return {
           value: Buffer.from(args.text).toString("base64"),

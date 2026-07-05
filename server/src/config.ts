@@ -18,8 +18,8 @@ export const appConfig = {
     openAi: process.env.OPENAI_API_KEY
   },
   models: {
-    gemini: process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
-    cartesia: process.env.CARTESIA_MODEL_ID ?? "sonic-2"
+    gemini: process.env.GEMINI_MODEL ?? "gemini-3.1-flash-lite",
+    cartesia: process.env.CARTESIA_MODEL_ID ?? "sonic-3.5"
   },
   /** When true, each speech turn runs parallel STT (e.g. Deepgram models + OpenAI) and includes timings in debug.turn. Extra API cost. */
   sttBenchmark: process.env.STT_BENCHMARK === "1" || process.env.STT_BENCHMARK === "true",
