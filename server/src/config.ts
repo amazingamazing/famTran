@@ -25,6 +25,11 @@ export const appConfig = {
   sttBenchmark: process.env.STT_BENCHMARK === "1" || process.env.STT_BENCHMARK === "true",
   /** When true, mic PCM is sent to Deepgram over a live WebSocket; disabled automatically when sttBenchmark is on (batch-only benchmark). */
   sttStream: process.env.STT_STREAM === "1" || process.env.STT_STREAM === "true",
+  /** Live STT model when sttStream is on: nova-3 (v1) or flux (v2 flux-general-multi). */
+  sttStreamModel: (() => {
+    const raw = process.env.STT_STREAM_MODEL ?? "nova-3";
+    return raw === "flux" ? ("flux" as const) : ("nova-3" as const);
+  })(),
   /**
    * When true (with sttStream + Deepgram), debounced interim STT is sent as `transcript.live` to the **speaker only** (self-monitor).
    * Listeners receive phrase-final `transcript.chunk` + TTS during the turn; `turn.stop` may emit a final chunk only when the batch STT adds new tail text beyond streamed phrases.

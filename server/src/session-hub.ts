@@ -5,6 +5,8 @@ import type { WebSocket } from "ws";
 
 import { appConfig } from "./config.js";
 import { DgPcmStream } from "./deepgram-stream.js";
+import { FluxPcmStream } from "./flux-stream.js";
+import type { PcmStream } from "./pcm-stream.js";
 
 /** Live translation / STT chunking (change here; not environment variables). */
 const STREAM = {
@@ -43,7 +45,7 @@ type ActiveTurn = {
   audioChunks: Buffer[];
   textChunks: string[];
   /** Set when non-hinted PCM is forwarded to Deepgram live (see {@link appConfig.sttStream}). */
-  dgStream: DgPcmStream | null;
+  dgStream: PcmStream | null;
   latestLiveSource: string;
   liveSeq: number;
   liveDebounce: ReturnType<typeof setTimeout> | null;
@@ -470,9 +472,7 @@ export class SessionHub {
               const tId = event.turnId;
               const live = this.shouldLiveCaptions();
               turn.usedPhraseStreaming = true;
-              turn.dgStream = new DgPcmStream(key, turn.sourceLanguage, {
-                endpointingMs:
-                  appConfig.deepgramEndpointingMs > 0 ? appConfig.deepgramEndpointingMs : undefined,
+              const streamOptions = {
                 onTranscript: live
                   ? (sourceText: string) => {
                       this.scheduleLiveCaption({ turnId: tId, sourceText });
@@ -481,7 +481,15 @@ export class SessionHub {
                 onFinalSegment: (segmentText: string) => {
                   this.ingestPhraseFinalSegment({ turnId: tId, segmentText });
                 }
-              });
+              };
+              turn.dgStream =
+                appConfig.sttStreamModel === "flux"
+                  ? new FluxPcmStream(key, turn.sourceLanguage, streamOptions)
+                  : new DgPcmStream(key, turn.sourceLanguage, {
+                      ...streamOptions,
+                      endpointingMs:
+                        appConfig.deepgramEndpointingMs > 0 ? appConfig.deepgramEndpointingMs : undefined
+                    });
             }
             turn.dgStream.addChunk(chunkBytes);
           }
@@ -913,6 +921,15 @@ export class SessionHub {
     return appConfig.sttStream && !appConfig.sttBenchmark;
   }
 
+  private deepgramStreamTranscriptionPath(durationMs?: number): string {
+    if (appConfig.sttStreamModel === "flux") {
+      return durationMs !== undefined
+        ? `stt.deepgram_flux_stream:${durationMs}ms`
+        : "stt.deepgram_flux_stream";
+    }
+    return "stt.deepgram_stream";
+  }
+
   private shouldLiveCaptions(): boolean {
     return this.shouldSttStream() && appConfig.liveCaptions;
   }
@@ -1197,7 +1214,7 @@ export class SessionHub {
         isFinal: true,
         timestamp: Date.now(),
         debug: {
-          transcriptionPath: "stt.deepgram_stream",
+          transcriptionPath: this.deepgramStreamTranscriptionPath(),
           transcriptionDetail: "phrase_final",
           translationPath: translation.path,
           translationDetail: translation.detail,
@@ -1293,7 +1310,13 @@ export class SessionHub {
         // fall through to batch
       }
       if (streamValue.length > 0) {
-        return { result: { value: streamValue, path: "stt.deepgram_stream", detail: "live_websocket" } };
+        return {
+          result: {
+            value: streamValue,
+            path: this.deepgramStreamTranscriptionPath(turn.dgStream.getStreamDurationMs?.()),
+            detail: "live_websocket"
+          }
+        };
       }
     }
     return this.providers.transcribeForTurn({
