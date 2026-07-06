@@ -1,6 +1,71 @@
 import { appConfig } from "./config.js";
 import type { SttBenchmarkRow, SupportedLanguage } from "@family-translation/shared";
 
+export const TRANSLATION_FETCH_TIMEOUT_MS = 10_000;
+export const TTS_FETCH_TIMEOUT_MS = 15_000;
+
+export const fetchWithTimeout = async (
+  url: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+export const isFetchTimeoutError = (err: unknown) =>
+  err instanceof Error && err.name === "AbortError";
+
+/** EN voices — index 0 is the legacy default (first speaker unchanged). */
+const CARTESIA_VOICES_EN = [
+  "f9836c6e-a0bd-460e-9d3c-f7299fa60f94", // legacy default
+  "f786b574-daa5-4673-aa0c-cbe3e8534c02", // Katie — conversational (Cartesia Sonic 3.5 docs)
+  "a5136bf9-224c-4d76-b823-52bd5efcffcc", // Jameson — conversational male
+  "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4" // Skylar — conversational female
+] as const;
+
+/** JA voices — index 0 is the legacy default. */
+const CARTESIA_VOICES_JA = [
+  "694f9389-aac1-45b6-b726-9d9369183238", // Sarah — legacy default
+  "2b568345-1d48-4047-b25f-7baccf842eb0", // Japanese Woman Conversational
+  "e8a863c6-22c7-4671-86ca-91cacffc038d", // Japanese Male Conversational
+  "794f9389-aac1-45b6-b726-9d9369183238" // Sarah Curious
+] as const;
+
+export const hashSpeakerToVoiceIndex = (speakerId: string, poolSize: number): number => {
+  let hash = 0;
+  for (let i = 0; i < speakerId.length; i += 1) {
+    hash = (hash * 31 + speakerId.charCodeAt(i)) >>> 0;
+  }
+  return hash % poolSize;
+};
+
+export const resolveSpeakerVoiceIndex = (
+  speakerId: string,
+  poolSize: number,
+  usedIndices: ReadonlySet<number>,
+  cachedIndex?: number
+): number => {
+  if (cachedIndex !== undefined) {
+    return cachedIndex;
+  }
+  const preferred = hashSpeakerToVoiceIndex(speakerId, poolSize);
+  if (!usedIndices.has(preferred)) {
+    return preferred;
+  }
+  for (let i = 0; i < poolSize; i += 1) {
+    if (!usedIndices.has(i)) {
+      return i;
+    }
+  }
+  return preferred;
+};
+
 export const isGemini3FamilyModel = (model: string) => model.startsWith("gemini-3");
 
 export const buildGeminiGenerateContentBody = (prompt: string, model: string) => {
@@ -98,6 +163,11 @@ export interface ProviderPipeline {
 export class InMemoryProviderPipeline implements ProviderPipeline {
   private providers: ProviderSelection;
   private readonly secrets: ProviderSecrets;
+  private cartesiaVoiceIndexBySpeakerLang = new Map<string, number>();
+  private cartesiaUsedIndicesByLang: Record<SupportedLanguage, Set<number>> = {
+    en: new Set(),
+    ja: new Set()
+  };
 
   constructor(initial: ProviderSelection, secrets: ProviderSecrets = {}) {
     this.providers = initial;
@@ -337,13 +407,14 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
         for (let attempt = 1; attempt <= 3; attempt += 1) {
           try {
             const t0 = Date.now();
-            const response = await fetch(
+            const response = await fetchWithTimeout(
               `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.secrets.geminiApiKey}`,
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(buildGeminiGenerateContentBody(prompt, model))
-              }
+              },
+              TRANSLATION_FETCH_TIMEOUT_MS
             );
             if (!response.ok) {
               const responseText = await response.text();
@@ -365,8 +436,10 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
             }
             lastDetail = `model=${model} empty_candidate`;
             geminiFailureDetail = lastDetail;
-          } catch {
-            lastDetail = `model=${model} exception`;
+          } catch (err) {
+            lastDetail = isFetchTimeoutError(err)
+              ? `model=${model} timeout=${TRANSLATION_FETCH_TIMEOUT_MS}ms`
+              : `model=${model} exception`;
             geminiFailureDetail = lastDetail;
             const waitMs = 300 * attempt;
             await new Promise((resolve) => setTimeout(resolve, waitMs));
@@ -411,34 +484,39 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
     if (this.providers.tts === "cartesia" && this.secrets.cartesiaApiKey) {
       try {
         const modelId = this.secrets.cartesiaModelId ?? "sonic-3.5";
+        const { voiceId, voiceIndex } = this.pickCartesiaVoice(args.targetLanguage, args.speakerId);
         const t0 = Date.now();
-        const response = await fetch("https://api.cartesia.ai/tts/bytes", {
-          method: "POST",
-          headers: {
-            "X-API-Key": this.secrets.cartesiaApiKey,
-            "Content-Type": "application/json",
-            "Cartesia-Version": "2026-03-01"
-          },
-          body: JSON.stringify({
-            model_id: modelId,
-            transcript: args.text,
-            language: args.targetLanguage === "ja" ? "ja" : "en",
-            output_format: {
-              container: "raw",
-              encoding: "pcm_s16le",
-              sample_rate: 22050
+        const response = await fetchWithTimeout(
+          "https://api.cartesia.ai/tts/bytes",
+          {
+            method: "POST",
+            headers: {
+              "X-API-Key": this.secrets.cartesiaApiKey,
+              "Content-Type": "application/json",
+              "Cartesia-Version": "2026-03-01"
             },
-            voice: {
-              mode: "id",
-              id: args.targetLanguage === "ja" ? "694f9389-aac1-45b6-b726-9d9369183238" : "f9836c6e-a0bd-460e-9d3c-f7299fa60f94"
-            }
-          })
-        });
+            body: JSON.stringify({
+              model_id: modelId,
+              transcript: args.text,
+              language: args.targetLanguage === "ja" ? "ja" : "en",
+              output_format: {
+                container: "raw",
+                encoding: "pcm_s16le",
+                sample_rate: 22050
+              },
+              voice: {
+                mode: "id",
+                id: voiceId
+              }
+            })
+          },
+          TTS_FETCH_TIMEOUT_MS
+        );
         if (response.ok) {
           const bytes = new Uint8Array(await response.arrayBuffer());
           return {
             value: Buffer.from(bytes).toString("base64"),
-            path: `tts.cartesia_api:${modelId}:${Date.now() - t0}ms`,
+            path: `tts.cartesia_api:${modelId}:v${voiceIndex}:${Date.now() - t0}ms`,
             mimeType: "audio/pcm"
           };
         }
@@ -448,26 +526,35 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
           detail: `status=${response.status}`,
           mimeType: "audio/pcm"
         };
-      } catch {
-        return { value: Buffer.from(args.text).toString("base64"), path: "tts.cartesia_exception", mimeType: "audio/pcm" };
+      } catch (err) {
+        return {
+          value: Buffer.from(args.text).toString("base64"),
+          path: "tts.cartesia_exception",
+          detail: isFetchTimeoutError(err) ? `timeout=${TTS_FETCH_TIMEOUT_MS}ms` : undefined,
+          mimeType: "audio/pcm"
+        };
       }
     }
 
     if (this.providers.tts === "openai" && this.secrets.openAiApiKey) {
       try {
-        const response = await fetch("https://api.openai.com/v1/audio/speech", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.secrets.openAiApiKey}`,
-            "Content-Type": "application/json"
+        const response = await fetchWithTimeout(
+          "https://api.openai.com/v1/audio/speech",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${this.secrets.openAiApiKey}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              model: "gpt-4o-mini-tts",
+              voice: "alloy",
+              input: args.text,
+              format: "wav"
+            })
           },
-          body: JSON.stringify({
-            model: "gpt-4o-mini-tts",
-            voice: "alloy",
-            input: args.text,
-            format: "wav"
-          })
-        });
+          TTS_FETCH_TIMEOUT_MS
+        );
         if (response.ok) {
           const bytes = new Uint8Array(await response.arrayBuffer());
           return { value: Buffer.from(bytes).toString("base64"), path: "tts.openai_api", mimeType: "audio/wav" };
@@ -478,12 +565,33 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
           detail: `status=${response.status}`,
           mimeType: "audio/wav"
         };
-      } catch {
-        return { value: Buffer.from(args.text).toString("base64"), path: "tts.openai_exception", mimeType: "audio/wav" };
+      } catch (err) {
+        return {
+          value: Buffer.from(args.text).toString("base64"),
+          path: "tts.openai_exception",
+          detail: isFetchTimeoutError(err) ? `timeout=${TTS_FETCH_TIMEOUT_MS}ms` : undefined,
+          mimeType: "audio/wav"
+        };
       }
     }
 
     return { value: Buffer.from(args.text).toString("base64"), path: "tts.passthrough_text_base64", mimeType: "audio/pcm" };
+  }
+
+  private pickCartesiaVoice(
+    targetLanguage: SupportedLanguage,
+    speakerId: string
+  ): { voiceId: string; voiceIndex: number } {
+    const pool = targetLanguage === "ja" ? CARTESIA_VOICES_JA : CARTESIA_VOICES_EN;
+    const cacheKey = `${targetLanguage}:${speakerId}`;
+    const cachedIndex = this.cartesiaVoiceIndexBySpeakerLang.get(cacheKey);
+    const usedIndices = this.cartesiaUsedIndicesByLang[targetLanguage];
+    const voiceIndex = resolveSpeakerVoiceIndex(speakerId, pool.length, usedIndices, cachedIndex);
+    if (cachedIndex === undefined) {
+      this.cartesiaVoiceIndexBySpeakerLang.set(cacheKey, voiceIndex);
+      usedIndices.add(voiceIndex);
+    }
+    return { voiceId: pool[voiceIndex], voiceIndex };
   }
 
   private async translateWithOpenAi(args: {
@@ -495,24 +603,28 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
       return null;
     }
     try {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.secrets.openAiApiKey}`,
-          "Content-Type": "application/json"
+      const response = await fetchWithTimeout(
+        "https://api.openai.com/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.secrets.openAiApiKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "gpt-4.1-mini",
+            temperature: 0.2,
+            messages: [
+              {
+                role: "system",
+                content: `Translate from ${args.sourceLanguage} to ${args.targetLanguage}. Output translation only.`
+              },
+              { role: "user", content: args.sourceText }
+            ]
+          })
         },
-        body: JSON.stringify({
-          model: "gpt-4.1-mini",
-          temperature: 0.2,
-          messages: [
-            {
-              role: "system",
-              content: `Translate from ${args.sourceLanguage} to ${args.targetLanguage}. Output translation only.`
-            },
-            { role: "user", content: args.sourceText }
-          ]
-        })
-      });
+        TRANSLATION_FETCH_TIMEOUT_MS
+      );
       if (!response.ok) {
         return null;
       }

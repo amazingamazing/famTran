@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildGeminiGenerateContentBody, isGemini3FamilyModel } from "../src/providers.js";
+import {
+  buildGeminiGenerateContentBody,
+  hashSpeakerToVoiceIndex,
+  InMemoryProviderPipeline,
+  isGemini3FamilyModel,
+  resolveSpeakerVoiceIndex,
+  TTS_FETCH_TIMEOUT_MS,
+  TRANSLATION_FETCH_TIMEOUT_MS
+} from "../src/providers.js";
 
 describe("Gemini provider helpers", () => {
   it("detects Gemini 3 family models by prefix", () => {
@@ -22,5 +30,122 @@ describe("Gemini provider helpers", () => {
       generationConfig?: unknown;
     };
     expect(body.generationConfig).toBeUndefined();
+  });
+});
+
+describe("fetch timeouts", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("aborts hung Cartesia fetch and returns cartesia_exception with timeout detail", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      });
+    });
+
+    const pipeline = new InMemoryProviderPipeline(
+      { stt: "deepgram", translation: "gemini", tts: "cartesia" },
+      { cartesiaApiKey: "test-key" }
+    );
+
+    const promise = pipeline.synthesizeSpeech({
+      text: "hello",
+      targetLanguage: "en",
+      speakerId: "speaker-a"
+    });
+    await vi.advanceTimersByTimeAsync(TTS_FETCH_TIMEOUT_MS);
+
+    const result = await promise;
+    expect(result.path).toBe("tts.cartesia_exception");
+    expect(result.detail).toBe(`timeout=${TTS_FETCH_TIMEOUT_MS}ms`);
+  });
+
+  it(
+    "aborts hung Gemini fetch and retries with timeout detail in failure path",
+    async () => {
+      vi.useFakeTimers();
+      vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+        });
+      });
+
+      const pipeline = new InMemoryProviderPipeline(
+        { stt: "deepgram", translation: "gemini", tts: "cartesia" },
+        { geminiApiKey: "test-key" }
+      );
+
+      const promise = pipeline.translateText({
+        sourceText: "hello",
+        sourceLanguage: "en",
+        targetLanguage: "ja",
+        context: { glossaryLines: [], correctionLines: [], recentTurns: [] }
+      });
+
+      await vi.runAllTimersAsync();
+
+      const result = await promise;
+      expect(result.path).toBe("translation.gemini_http_error");
+      expect(result.detail).toContain(`timeout=${TRANSLATION_FETCH_TIMEOUT_MS}ms`);
+    },
+    30_000
+  );
+});
+
+describe("Cartesia voice assignment", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns cached voice index for the same speaker", () => {
+    const used = new Set<number>();
+    const first = resolveSpeakerVoiceIndex("speaker-a", 4, used);
+    used.add(first);
+    const second = resolveSpeakerVoiceIndex("speaker-a", 4, used, first);
+    expect(second).toBe(first);
+  });
+
+  it("assigns different indices to two speakers when hashes differ", () => {
+    const speakerA = "speaker-alpha";
+    const speakerB = "speaker-beta";
+    expect(hashSpeakerToVoiceIndex(speakerA, 4)).not.toBe(hashSpeakerToVoiceIndex(speakerB, 4));
+
+    const used = new Set<number>();
+    const indexA = resolveSpeakerVoiceIndex(speakerA, 4, used);
+    used.add(indexA);
+    const indexB = resolveSpeakerVoiceIndex(speakerB, 4, used);
+    expect(indexA).not.toBe(indexB);
+  });
+
+  it("uses stable voice ids per speaker in synthesizeSpeech", async () => {
+    const voiceIds: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { voice?: { id?: string } };
+      if (body.voice?.id) {
+        voiceIds.push(body.voice.id);
+      }
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+
+    const pipeline = new InMemoryProviderPipeline(
+      { stt: "deepgram", translation: "gemini", tts: "cartesia" },
+      { cartesiaApiKey: "test-key" }
+    );
+
+    await pipeline.synthesizeSpeech({ text: "one", targetLanguage: "en", speakerId: "alice" });
+    await pipeline.synthesizeSpeech({ text: "two", targetLanguage: "en", speakerId: "alice" });
+    await pipeline.synthesizeSpeech({ text: "three", targetLanguage: "en", speakerId: "bob" });
+
+    expect(voiceIds).toHaveLength(3);
+    expect(voiceIds[0]).toBe(voiceIds[1]);
+    expect(voiceIds[0]).not.toBe(voiceIds[2]);
   });
 });
