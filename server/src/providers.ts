@@ -1,5 +1,5 @@
 import { appConfig } from "./config.js";
-import type { SttBenchmarkRow, SupportedLanguage } from "@family-translation/shared";
+import type { SttBenchmarkRow, SupportedLanguage, VoiceGender } from "@family-translation/shared";
 
 export const TRANSLATION_FETCH_TIMEOUT_MS = 10_000;
 export const TTS_FETCH_TIMEOUT_MS = 15_000;
@@ -21,21 +21,23 @@ export const fetchWithTimeout = async (
 export const isFetchTimeoutError = (err: unknown) =>
   err instanceof Error && err.name === "AbortError";
 
-/** EN voices — index 0 is the legacy default (first speaker unchanged). */
-const CARTESIA_VOICES_EN = [
-  "f9836c6e-a0bd-460e-9d3c-f7299fa60f94", // legacy default
-  "f786b574-daa5-4673-aa0c-cbe3e8534c02", // Katie — conversational (Cartesia Sonic 3.5 docs)
-  "a5136bf9-224c-4d76-b823-52bd5efcffcc", // Jameson — conversational male
-  "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4" // Skylar — conversational female
-] as const;
+const CARTESIA_VOICES_JA = {
+  male: ["30894953-bcce-41fe-892c-15ce19c843ff", "65209f8e-6140-4a20-b819-3cc2e21da19b"],
+  female: ["d0ff6870-dd30-420d-8568-d756d806ea62", "498e7f37-7fa3-4e2c-b8e2-8b6e9276f956"]
+} as const;
 
-/** JA voices — index 0 is the legacy default. */
-const CARTESIA_VOICES_JA = [
-  "694f9389-aac1-45b6-b726-9d9369183238", // Sarah — legacy default
-  "2b568345-1d48-4047-b25f-7baccf842eb0", // Japanese Woman Conversational
-  "e8a863c6-22c7-4671-86ca-91cacffc038d" // Japanese Male Conversational
-  // TODO: fill from Cartesia voice library
-] as const;
+const CARTESIA_VOICES_EN = {
+  male: ["630ed21c-2c5c-41cf-9d82-10a7fd668370", "47c38ca4-5f35-497b-b1a3-415245fb35e1"],
+  female: ["db6b0ed5-d5d3-463d-ae85-518a07d3c2b4", "f786b574-daa5-4673-aa0c-cbe3e8534c02"]
+} as const;
+
+const CARTESIA_VOICES_BY_LANG: Record<
+  SupportedLanguage,
+  { male: readonly string[]; female: readonly string[] }
+> = {
+  en: CARTESIA_VOICES_EN,
+  ja: CARTESIA_VOICES_JA
+};
 
 export const hashSpeakerToVoiceIndex = (speakerId: string, poolSize: number): number => {
   let hash = 0;
@@ -96,6 +98,7 @@ type SynthInput = {
   text: string;
   targetLanguage: SupportedLanguage;
   speakerId: string;
+  voiceGender: VoiceGender;
 };
 
 type ProviderSecrets = {
@@ -160,9 +163,12 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
   private providers: ProviderSelection;
   private readonly secrets: ProviderSecrets;
   private cartesiaVoiceIndexBySpeakerLang = new Map<string, number>();
-  private cartesiaUsedIndicesByLang: Record<SupportedLanguage, Set<number>> = {
-    en: new Set(),
-    ja: new Set()
+  private cartesiaUsedIndicesByLangGender: Record<
+    SupportedLanguage,
+    Record<VoiceGender, Set<number>>
+  > = {
+    en: { male: new Set(), female: new Set() },
+    ja: { male: new Set(), female: new Set() }
   };
 
   constructor(initial: ProviderSelection, secrets: ProviderSecrets = {}) {
@@ -480,7 +486,11 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
     if (this.providers.tts === "cartesia" && this.secrets.cartesiaApiKey) {
       try {
         const modelId = this.secrets.cartesiaModelId ?? "sonic-3.5";
-        const { voiceId, voiceIndex } = this.pickCartesiaVoice(args.targetLanguage, args.speakerId);
+        const { voiceId, voiceIndex, voiceGender } = this.pickCartesiaVoice(
+          args.targetLanguage,
+          args.speakerId,
+          args.voiceGender
+        );
         const t0 = Date.now();
         const response = await fetchWithTimeout(
           "https://api.cartesia.ai/tts/bytes",
@@ -512,7 +522,7 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
           const bytes = new Uint8Array(await response.arrayBuffer());
           return {
             value: Buffer.from(bytes).toString("base64"),
-            path: `tts.cartesia_api:${modelId}:v${voiceIndex}:${Date.now() - t0}ms`,
+            path: `tts.cartesia_api:${modelId}:${voiceGender}-v${voiceIndex}:${Date.now() - t0}ms`,
             mimeType: "audio/pcm"
           };
         }
@@ -574,20 +584,42 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
     return { value: Buffer.from(args.text).toString("base64"), path: "tts.passthrough_text_base64", mimeType: "audio/pcm" };
   }
 
+  private invalidateSpeakerVoiceCacheForOtherGenders(
+    targetLanguage: SupportedLanguage,
+    speakerId: string,
+    voiceGender: VoiceGender
+  ): void {
+    for (const gender of ["male", "female"] as const) {
+      if (gender === voiceGender) {
+        continue;
+      }
+      const oldKey = `${targetLanguage}:${gender}:${speakerId}`;
+      const oldIndex = this.cartesiaVoiceIndexBySpeakerLang.get(oldKey);
+      if (oldIndex === undefined) {
+        continue;
+      }
+      this.cartesiaVoiceIndexBySpeakerLang.delete(oldKey);
+      this.cartesiaUsedIndicesByLangGender[targetLanguage][gender].delete(oldIndex);
+    }
+  }
+
   private pickCartesiaVoice(
     targetLanguage: SupportedLanguage,
-    speakerId: string
-  ): { voiceId: string; voiceIndex: number } {
-    const pool = targetLanguage === "ja" ? CARTESIA_VOICES_JA : CARTESIA_VOICES_EN;
-    const cacheKey = `${targetLanguage}:${speakerId}`;
+    speakerId: string,
+    voiceGender: VoiceGender
+  ): { voiceId: string; voiceIndex: number; voiceGender: VoiceGender } {
+    this.invalidateSpeakerVoiceCacheForOtherGenders(targetLanguage, speakerId, voiceGender);
+
+    const pool = CARTESIA_VOICES_BY_LANG[targetLanguage][voiceGender];
+    const cacheKey = `${targetLanguage}:${voiceGender}:${speakerId}`;
     const cachedIndex = this.cartesiaVoiceIndexBySpeakerLang.get(cacheKey);
-    const usedIndices = this.cartesiaUsedIndicesByLang[targetLanguage];
+    const usedIndices = this.cartesiaUsedIndicesByLangGender[targetLanguage][voiceGender];
     const voiceIndex = resolveSpeakerVoiceIndex(speakerId, pool.length, usedIndices, cachedIndex);
     if (cachedIndex === undefined) {
       this.cartesiaVoiceIndexBySpeakerLang.set(cacheKey, voiceIndex);
       usedIndices.add(voiceIndex);
     }
-    return { voiceId: pool[voiceIndex], voiceIndex };
+    return { voiceId: pool[voiceIndex], voiceIndex, voiceGender };
   }
 
   private async translateWithOpenAi(args: {

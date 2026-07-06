@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { ClientEvent, ServerEvent, SupportedLanguage } from "@family-translation/shared";
+import type { ClientEvent, ServerEvent, SupportedLanguage, VoiceGender } from "@family-translation/shared";
 import type { WebSocket } from "ws";
 
 import { appConfig } from "./config.js";
@@ -33,6 +33,7 @@ type SessionParticipant = {
   displayName: string;
   language: SupportedLanguage;
   hearAudio: boolean;
+  voiceGender: VoiceGender;
   contextNotes: string;
 };
 
@@ -402,6 +403,7 @@ export class SessionHub {
       displayName: event.displayName,
       language: event.language,
       hearAudio: event.hearAudio,
+      voiceGender: event.voiceGender ?? "female",
       contextNotes: event.contextNotes
     });
 
@@ -790,7 +792,12 @@ export class SessionHub {
         return pending;
       }
       const p = this.providers
-        .synthesizeSpeech({ text, targetLanguage: ttsLanguage, speakerId: sourceSpeaker.clientId })
+        .synthesizeSpeech({
+          text,
+          targetLanguage: ttsLanguage,
+          speakerId: sourceSpeaker.clientId,
+          voiceGender: sourceSpeaker.voiceGender
+        })
         .then((speech) => {
           ttsInFlight.delete(key);
           ttsCache.set(key, speech);
@@ -857,6 +864,7 @@ export class SessionHub {
         targetLanguage,
         isSpeaker,
         hearAudio: participant.hearAudio,
+        voiceGender: participant.voiceGender,
         translatedText,
         translationPath: translation.path,
         translationDetail: translation.detail,
@@ -1183,7 +1191,12 @@ export class SessionHub {
         return pending;
       }
       const p = this.providers
-        .synthesizeSpeech({ text, targetLanguage: ttsLanguage, speakerId: sourceSpeaker.clientId })
+        .synthesizeSpeech({
+          text,
+          targetLanguage: ttsLanguage,
+          speakerId: sourceSpeaker.clientId,
+          voiceGender: sourceSpeaker.voiceGender
+        })
         .then((speech) => {
           ttsInFlight.delete(key);
           ttsCache.set(key, speech);
@@ -1277,6 +1290,7 @@ export class SessionHub {
       targetLanguage: participant.language,
       isSpeaker: participant.clientId === args.turn.speakerId,
       hearAudio: participant.hearAudio,
+      voiceGender: participant.voiceGender,
       translatedText:
         participant.clientId === args.turn.speakerId
           ? args.fullSourceText

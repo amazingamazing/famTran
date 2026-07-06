@@ -1,5 +1,7 @@
 export type SupportedLanguage = "en" | "ja";
 
+export type VoiceGender = "male" | "female";
+
 /** One parallel STT path result for STT_BENCHMARK=1; attached to debug.turn on the server. */
 export type SttBenchmarkRow = {
   id: string;
@@ -120,6 +122,7 @@ export type ServerEvent =
         targetLanguage: SupportedLanguage;
         isSpeaker: boolean;
         hearAudio: boolean;
+        voiceGender: VoiceGender;
         translatedText: string;
         translationPath: string;
         translationDetail?: string;
@@ -135,6 +138,7 @@ export type ClientEvent =
       mode: ClientMode;
       contextNotes: string;
       hearAudio: boolean;
+      voiceGender?: VoiceGender;
     }
   | {
       type: "turn.start";
