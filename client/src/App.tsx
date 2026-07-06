@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ProviderType, ServerEvent, SupportedLanguage } from "@family-translation/shared";
+import type { ProviderType, ServerEvent, SupportedLanguage, VoiceGender } from "@family-translation/shared";
 
 import "./App.css";
 import { appStrings } from "./lib/app-strings";
@@ -317,6 +317,8 @@ const getCookieBoolean = (name: string, fallback: boolean) => {
   return fallback;
 };
 
+const parseVoiceGender = (raw: string): VoiceGender => (raw === "male" ? "male" : "female");
+
 const cookieProviderStt = getCookie("family_translation_provider_stt");
 const initialProviderStt: ProviderType = cookieProviderStt === "openai" ? "openai" : "deepgram";
 
@@ -354,7 +356,7 @@ function App() {
   const stopMicTestRef = useRef<(opts?: { immediate?: boolean }) => Promise<void>>(async () => {});
   const onboardingDoneInit = getCookie(ONBOARDING_DONE_COOKIE) === "true";
   const [onboardingDone, setOnboardingDone] = useState(onboardingDoneInit);
-  const [onboardingStep, setOnboardingStep] = useState<0 | 1 | 2>(0);
+  const [onboardingStep, setOnboardingStep] = useState<0 | 1 | 2 | 3>(0);
   const [onboardingNameDraft, setOnboardingNameDraft] = useState("");
   const [onboardingError, setOnboardingError] = useState("");
 
@@ -370,6 +372,9 @@ function App() {
   const [contextNotes, setContextNotes] = useState(() => getCookie("family_translation_context_notes"));
   const [hearAudio, setHearAudio] = useState(() =>
     onboardingDoneInit ? getCookieBoolean("family_translation_hear_audio", true) : true
+  );
+  const [voiceGender, setVoiceGender] = useState<VoiceGender>(() =>
+    onboardingDoneInit ? parseVoiceGender(getCookie("family_translation_voice_gender")) : "female"
   );
   const [connected, setConnected] = useState(false);
   const [clientId, setClientId] = useState("");
@@ -588,6 +593,10 @@ function App() {
   useEffect(() => {
     setCookie("family_translation_hear_audio", String(hearAudio));
   }, [hearAudio]);
+
+  useEffect(() => {
+    setCookie("family_translation_voice_gender", voiceGender);
+  }, [voiceGender]);
 
   useEffect(() => {
     setCookie("family_translation_context_notes", contextNotes);
@@ -832,7 +841,8 @@ function App() {
           language,
           mode: "text_only",
           contextNotes,
-          hearAudio
+          hearAudio,
+          voiceGender
         })
       );
     };
@@ -1288,6 +1298,7 @@ function App() {
         displayName,
         language,
         hearAudio,
+        voiceGender,
         autoPilotEnabled,
         autoPilotRuns,
         nextAutoDelaySeconds,
@@ -1404,6 +1415,36 @@ function App() {
           ) : null}
           {onboardingStep === 2 ? (
             <>
+              <p className="onboardingPrompt">{pick.onboardingVoicePrompt}</p>
+              <div className="onboardingActions">
+                <button
+                  type="button"
+                  className="onboardingPrimary"
+                  onClick={() => {
+                    setVoiceGender("male");
+                    setOnboardingStep(3);
+                  }}
+                >
+                  {pick.onboardingVoiceMale}
+                </button>
+                <button
+                  type="button"
+                  className="onboardingPrimary"
+                  onClick={() => {
+                    setVoiceGender("female");
+                    setOnboardingStep(3);
+                  }}
+                >
+                  {pick.onboardingVoiceFemale}
+                </button>
+              </div>
+              <button type="button" className="onboardingBackButton" onClick={() => setOnboardingStep(1)}>
+                {pick.onboardingBack}
+              </button>
+            </>
+          ) : null}
+          {onboardingStep === 3 ? (
+            <>
               <p className="onboardingPrompt">{pick.onboardingNamePrompt}</p>
               <label className="onboardingNameField">
                 <input
@@ -1429,7 +1470,7 @@ function App() {
                 className="onboardingBackButton"
                 onClick={() => {
                   setOnboardingError("");
-                  setOnboardingStep(1);
+                  setOnboardingStep(2);
                 }}
               >
                 {pick.onboardingBack}
@@ -1632,6 +1673,29 @@ function App() {
                     onChange={(event) => setHearAudio(event.target.checked)}
                   />
                 </label>
+                <fieldset className="voiceGenderField">
+                  <legend>{S.voiceGenderLabel}</legend>
+                  <label>
+                    <input
+                      type="radio"
+                      name="voiceGender"
+                      value="male"
+                      checked={voiceGender === "male"}
+                      onChange={() => setVoiceGender("male")}
+                    />
+                    {S.voiceGenderMale}
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="voiceGender"
+                      value="female"
+                      checked={voiceGender === "female"}
+                      onChange={() => setVoiceGender("female")}
+                    />
+                    {S.voiceGenderFemale}
+                  </label>
+                </fieldset>
                 <label className="full">
                   {S.contextNotesLabel}
                   <textarea

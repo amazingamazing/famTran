@@ -9,6 +9,19 @@ import {
   TRANSLATION_FETCH_TIMEOUT_MS
 } from "../src/providers.js";
 
+const synthArgs = (overrides: {
+  text?: string;
+  targetLanguage?: "en" | "ja";
+  speakerId?: string;
+  voiceGender?: "male" | "female";
+}) => ({
+  text: "hello",
+  targetLanguage: "en" as const,
+  speakerId: "speaker-a",
+  voiceGender: "female" as const,
+  ...overrides
+});
+
 describe("Gemini provider helpers", () => {
   it("detects Gemini 3 family models by prefix", () => {
     expect(isGemini3FamilyModel("gemini-3.1-flash-lite")).toBe(true);
@@ -53,11 +66,7 @@ describe("fetch timeouts", () => {
       { cartesiaApiKey: "test-key" }
     );
 
-    const promise = pipeline.synthesizeSpeech({
-      text: "hello",
-      targetLanguage: "en",
-      speakerId: "speaker-a"
-    });
+    const promise = pipeline.synthesizeSpeech(synthArgs({ text: "hello" }));
     await vi.advanceTimersByTimeAsync(TTS_FETCH_TIMEOUT_MS);
 
     const result = await promise;
@@ -107,20 +116,20 @@ describe("Cartesia voice assignment", () => {
 
   it("returns cached voice index for the same speaker", () => {
     const used = new Set<number>();
-    const first = resolveSpeakerVoiceIndex("speaker-a", 4, used);
+    const first = resolveSpeakerVoiceIndex("speaker-a", 2, used);
     used.add(first);
-    const second = resolveSpeakerVoiceIndex("speaker-a", 4, used, first);
+    const second = resolveSpeakerVoiceIndex("speaker-a", 2, used, first);
     expect(second).toBe(first);
   });
 
   it("assigns index 0 then 1 sequentially regardless of speakerId hash", () => {
     const used = new Set<number>();
-    expect(resolveSpeakerVoiceIndex("speaker-that-would-hash-to-3", 4, used)).toBe(0);
+    expect(resolveSpeakerVoiceIndex("speaker-that-would-hash-to-3", 2, used)).toBe(0);
     used.add(0);
-    expect(resolveSpeakerVoiceIndex("another-speaker", 4, used)).toBe(1);
+    expect(resolveSpeakerVoiceIndex("another-speaker", 2, used)).toBe(1);
   });
 
-  it("uses stable voice ids and sequential indices per speaker in synthesizeSpeech", async () => {
+  it("uses stable voice ids and sequential indices per speaker within a gender sub-pool", async () => {
     const voiceIds: string[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body)) as { voice?: { id?: string } };
@@ -135,14 +144,48 @@ describe("Cartesia voice assignment", () => {
       { cartesiaApiKey: "test-key" }
     );
 
-    const first = await pipeline.synthesizeSpeech({ text: "one", targetLanguage: "en", speakerId: "alice" });
-    const second = await pipeline.synthesizeSpeech({ text: "two", targetLanguage: "en", speakerId: "alice" });
-    const third = await pipeline.synthesizeSpeech({ text: "three", targetLanguage: "en", speakerId: "bob" });
+    const first = await pipeline.synthesizeSpeech(
+      synthArgs({ text: "one", speakerId: "alice", voiceGender: "female" })
+    );
+    const second = await pipeline.synthesizeSpeech(
+      synthArgs({ text: "two", speakerId: "alice", voiceGender: "female" })
+    );
+    const third = await pipeline.synthesizeSpeech(
+      synthArgs({ text: "three", speakerId: "bob", voiceGender: "female" })
+    );
 
     expect(voiceIds).toHaveLength(3);
     expect(voiceIds[0]).toBe(voiceIds[1]);
     expect(voiceIds[0]).not.toBe(voiceIds[2]);
-    expect(first.path).toContain(":v0:");
-    expect(third.path).toContain(":v1:");
+    expect(first.path).toContain(":female-v0:");
+    expect(third.path).toContain(":female-v1:");
+  });
+
+  it("assigns a new voice from the other gender pool when preference changes", async () => {
+    const voiceIds: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { voice?: { id?: string } };
+      if (body.voice?.id) {
+        voiceIds.push(body.voice.id);
+      }
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+
+    const pipeline = new InMemoryProviderPipeline(
+      { stt: "deepgram", translation: "gemini", tts: "cartesia" },
+      { cartesiaApiKey: "test-key" }
+    );
+
+    const female = await pipeline.synthesizeSpeech(
+      synthArgs({ text: "one", speakerId: "alice", voiceGender: "female" })
+    );
+    const male = await pipeline.synthesizeSpeech(
+      synthArgs({ text: "two", speakerId: "alice", voiceGender: "male" })
+    );
+
+    expect(voiceIds).toHaveLength(2);
+    expect(voiceIds[0]).not.toBe(voiceIds[1]);
+    expect(female.path).toContain(":female-v0:");
+    expect(male.path).toContain(":male-v0:");
   });
 });

@@ -15,6 +15,9 @@ export type AppCopy = {
   langEnglish: string;
   langJapanese: string;
   hearTtsLabel: string;
+  voiceGenderLabel: string;
+  voiceGenderMale: string;
+  voiceGenderFemale: string;
   contextNotesLabel: string;
   connect: string;
   disconnect: string;
@@ -101,6 +104,9 @@ export type AppCopy = {
   onboardingUnderstandPromptFromJa: string;
   onboardingUnderstandYes: string;
   onboardingUnderstandNo: string;
+  onboardingVoicePrompt: string;
+  onboardingVoiceMale: string;
+  onboardingVoiceFemale: string;
   onboardingNamePrompt: string;
   onboardingNamePlaceholder: string;
   onboardingContinue: string;
@@ -123,6 +129,9 @@ const EN: AppCopy = {
   langEnglish: "English",
   langJapanese: "Japanese",
   hearTtsLabel: "Hear translated audio (TTS)",
+  voiceGenderLabel: "Voice / 声",
+  voiceGenderMale: "Male / 男性",
+  voiceGenderFemale: "Female / 女性",
   contextNotesLabel: "Context notes (people, terms, pronunciation hints)",
   connect: "Connect",
   disconnect: "Disconnect",
@@ -210,6 +219,9 @@ const EN: AppCopy = {
   onboardingUnderstandPromptFromJa: "英語はわかりますか？",
   onboardingUnderstandYes: "Yes",
   onboardingUnderstandNo: "No",
+  onboardingVoicePrompt: "Which voice should others hear when you speak? / あなたの声はどちらにしますか？",
+  onboardingVoiceMale: "Male / 男性",
+  onboardingVoiceFemale: "Female / 女性",
   onboardingNamePrompt: "What is your name?",
   onboardingNamePlaceholder: "e.g. Kosono",
   onboardingContinue: "Continue",

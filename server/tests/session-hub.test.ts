@@ -19,14 +19,24 @@ class MockSocket {
 }
 
 class SlowTtsPipeline extends InMemoryProviderPipeline {
-  override async synthesizeSpeech(args: { text: string; targetLanguage: "en" | "ja"; speakerId: string }) {
+  override async synthesizeSpeech(args: {
+    text: string;
+    targetLanguage: "en" | "ja";
+    speakerId: string;
+    voiceGender: "male" | "female";
+  }) {
     await new Promise((resolve) => setTimeout(resolve, 200));
     return super.synthesizeSpeech(args);
   }
 }
 
 class WavTtsPipeline extends InMemoryProviderPipeline {
-  override async synthesizeSpeech(args: { text: string; targetLanguage: "en" | "ja"; speakerId: string }) {
+  override async synthesizeSpeech(args: {
+    text: string;
+    targetLanguage: "en" | "ja";
+    speakerId: string;
+    voiceGender: "male" | "female";
+  }) {
     const result = await super.synthesizeSpeech(args);
     return {
       ...result,
