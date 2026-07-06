@@ -75,6 +75,10 @@ export type ServerEvent =
       payloadBase64: string;
       sequence: number;
       isLast: boolean;
+      debug?: {
+        ttsPath?: string;
+        ttsDetail?: string;
+      };
     }
   | {
       type: "providers.updated";

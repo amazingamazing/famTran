@@ -962,7 +962,9 @@ function App() {
           isLast: event.isLast
         });
         playQueue();
-        addDebugEvent(`audio.chunk turn=${event.turnId} mime=${event.mimeType} last=${event.isLast}`);
+        addDebugEvent(
+          `audio.chunk turn=${event.turnId} mime=${event.mimeType} last=${event.isLast} tts=${event.debug?.ttsPath ?? "n/a"}`
+        );
         return;
       }
       if (event.type === "debug.turn") {

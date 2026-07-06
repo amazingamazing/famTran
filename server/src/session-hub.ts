@@ -808,7 +808,11 @@ export class SessionHub {
         mimeType: speech.mimeType,
         payloadBase64: speech.value,
         sequence: 0,
-        isLast: true
+        isLast: true,
+        debug: {
+          ttsPath: speech.path,
+          ...(speech.detail ? { ttsDetail: speech.detail } : {})
+        }
       });
     };
 
@@ -1194,7 +1198,11 @@ export class SessionHub {
         mimeType: speech.mimeType,
         payloadBase64: speech.value,
         sequence: 0,
-        isLast: true
+        isLast: true,
+        debug: {
+          ttsPath: speech.path,
+          ...(speech.detail ? { ttsDetail: speech.detail } : {})
+        }
       });
     };
 
