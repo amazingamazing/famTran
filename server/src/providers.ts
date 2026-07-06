@@ -33,8 +33,8 @@ const CARTESIA_VOICES_EN = [
 const CARTESIA_VOICES_JA = [
   "694f9389-aac1-45b6-b726-9d9369183238", // Sarah — legacy default
   "2b568345-1d48-4047-b25f-7baccf842eb0", // Japanese Woman Conversational
-  "e8a863c6-22c7-4671-86ca-91cacffc038d", // Japanese Male Conversational
-  "794f9389-aac1-45b6-b726-9d9369183238" // Sarah Curious
+  "e8a863c6-22c7-4671-86ca-91cacffc038d" // Japanese Male Conversational
+  // TODO: fill from Cartesia voice library
 ] as const;
 
 export const hashSpeakerToVoiceIndex = (speakerId: string, poolSize: number): number => {
@@ -54,16 +54,12 @@ export const resolveSpeakerVoiceIndex = (
   if (cachedIndex !== undefined) {
     return cachedIndex;
   }
-  const preferred = hashSpeakerToVoiceIndex(speakerId, poolSize);
-  if (!usedIndices.has(preferred)) {
-    return preferred;
-  }
   for (let i = 0; i < poolSize; i += 1) {
     if (!usedIndices.has(i)) {
       return i;
     }
   }
-  return preferred;
+  return hashSpeakerToVoiceIndex(speakerId, poolSize);
 };
 
 export const isGemini3FamilyModel = (model: string) => model.startsWith("gemini-3");
@@ -521,14 +517,14 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
           };
         }
         return {
-          value: Buffer.from(args.text).toString("base64"),
+          value: "",
           path: "tts.cartesia_http_error",
           detail: `status=${response.status}`,
           mimeType: "audio/pcm"
         };
       } catch (err) {
         return {
-          value: Buffer.from(args.text).toString("base64"),
+          value: "",
           path: "tts.cartesia_exception",
           detail: isFetchTimeoutError(err) ? `timeout=${TTS_FETCH_TIMEOUT_MS}ms` : undefined,
           mimeType: "audio/pcm"

@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildGeminiGenerateContentBody,
-  hashSpeakerToVoiceIndex,
   InMemoryProviderPipeline,
   isGemini3FamilyModel,
   resolveSpeakerVoiceIndex,
@@ -64,6 +63,7 @@ describe("fetch timeouts", () => {
     const result = await promise;
     expect(result.path).toBe("tts.cartesia_exception");
     expect(result.detail).toBe(`timeout=${TTS_FETCH_TIMEOUT_MS}ms`);
+    expect(result.value).toBe("");
   });
 
   it(
@@ -113,19 +113,14 @@ describe("Cartesia voice assignment", () => {
     expect(second).toBe(first);
   });
 
-  it("assigns different indices to two speakers when hashes differ", () => {
-    const speakerA = "speaker-alpha";
-    const speakerB = "speaker-beta";
-    expect(hashSpeakerToVoiceIndex(speakerA, 4)).not.toBe(hashSpeakerToVoiceIndex(speakerB, 4));
-
+  it("assigns index 0 then 1 sequentially regardless of speakerId hash", () => {
     const used = new Set<number>();
-    const indexA = resolveSpeakerVoiceIndex(speakerA, 4, used);
-    used.add(indexA);
-    const indexB = resolveSpeakerVoiceIndex(speakerB, 4, used);
-    expect(indexA).not.toBe(indexB);
+    expect(resolveSpeakerVoiceIndex("speaker-that-would-hash-to-3", 4, used)).toBe(0);
+    used.add(0);
+    expect(resolveSpeakerVoiceIndex("another-speaker", 4, used)).toBe(1);
   });
 
-  it("uses stable voice ids per speaker in synthesizeSpeech", async () => {
+  it("uses stable voice ids and sequential indices per speaker in synthesizeSpeech", async () => {
     const voiceIds: string[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body)) as { voice?: { id?: string } };
@@ -140,12 +135,14 @@ describe("Cartesia voice assignment", () => {
       { cartesiaApiKey: "test-key" }
     );
 
-    await pipeline.synthesizeSpeech({ text: "one", targetLanguage: "en", speakerId: "alice" });
-    await pipeline.synthesizeSpeech({ text: "two", targetLanguage: "en", speakerId: "alice" });
-    await pipeline.synthesizeSpeech({ text: "three", targetLanguage: "en", speakerId: "bob" });
+    const first = await pipeline.synthesizeSpeech({ text: "one", targetLanguage: "en", speakerId: "alice" });
+    const second = await pipeline.synthesizeSpeech({ text: "two", targetLanguage: "en", speakerId: "alice" });
+    const third = await pipeline.synthesizeSpeech({ text: "three", targetLanguage: "en", speakerId: "bob" });
 
     expect(voiceIds).toHaveLength(3);
     expect(voiceIds[0]).toBe(voiceIds[1]);
     expect(voiceIds[0]).not.toBe(voiceIds[2]);
+    expect(first.path).toContain(":v0:");
+    expect(third.path).toContain(":v1:");
   });
 });

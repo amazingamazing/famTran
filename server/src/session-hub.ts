@@ -801,6 +801,9 @@ export class SessionHub {
     };
 
     const sendPcm = (recipient: SessionParticipant, ttsLanguage: SupportedLanguage, speech: SynthesisResult) => {
+      if (!speech.value) {
+        return;
+      }
       this.send(recipient.socket, {
         type: "audio.chunk",
         turnId,
@@ -1191,6 +1194,9 @@ export class SessionHub {
     };
 
     const sendPcm = (recipient: SessionParticipant, ttsLanguage: SupportedLanguage, speech: SynthesisResult) => {
+      if (!speech.value) {
+        return;
+      }
       this.send(recipient.socket, {
         type: "audio.chunk",
         turnId: args.turnId,
