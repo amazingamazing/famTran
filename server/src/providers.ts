@@ -22,13 +22,49 @@ export const isFetchTimeoutError = (err: unknown) =>
   err instanceof Error && err.name === "AbortError";
 
 const CARTESIA_VOICES_JA = {
-  male: ["30894953-bcce-41fe-892c-15ce19c843ff", "65209f8e-6140-4a20-b819-3cc2e21da19b"],
-  female: ["d0ff6870-dd30-420d-8568-d756d806ea62", "498e7f37-7fa3-4e2c-b8e2-8b6e9276f956"]
+  male: [
+    "30894953-bcce-41fe-892c-15ce19c843ff",
+    "65209f8e-6140-4a20-b819-3cc2e21da19b",
+    "177df681-25b1-48c2-bb47-03ca5fa27f0a",
+    "1d210168-d764-462c-8ab6-288a6d5a9579",
+    "6b92f628-be90-497c-8f4c-3b035002df71",
+    "e8a863c6-22c7-4671-86ca-91cacffc038d",
+    "9436e723-612d-4114-aeb0-fa00d4d639bf",
+    "49e02441-83ea-4c77-bda8-79fdd7f07e92"
+  ],
+  female: [
+    "d0ff6870-dd30-420d-8568-d756d806ea62",
+    "498e7f37-7fa3-4e2c-b8e2-8b6e9276f956",
+    "59d4fd2f-f5eb-4410-8105-58db7661144f",
+    "c7eafe22-8b71-40cd-850b-c5a3bbd8f8d2",
+    "2b568345-1d48-4047-b25f-7baccf842eb0",
+    "861213b7-f057-45c8-9527-0f4c144f1a03",
+    "63d6f469-8c2c-489d-b53f-d36f0bbdcd4b",
+    "31c55968-a9f4-4115-8831-3a16952179c8"
+  ]
 } as const;
 
 const CARTESIA_VOICES_EN = {
-  male: ["630ed21c-2c5c-41cf-9d82-10a7fd668370", "47c38ca4-5f35-497b-b1a3-415245fb35e1"],
-  female: ["db6b0ed5-d5d3-463d-ae85-518a07d3c2b4", "f786b574-daa5-4673-aa0c-cbe3e8534c02"]
+  male: [
+    "630ed21c-2c5c-41cf-9d82-10a7fd668370",
+    "47c38ca4-5f35-497b-b1a3-415245fb35e1",
+    "ef191366-f52f-447a-a398-ed8c0f2943a1",
+    "5ee9feff-1265-424a-9d7f-8e4d431a12c7",
+    "b24f41fd-00a3-4cd8-992a-a0c9f13f3ef1",
+    "12e85709-099c-480a-ba3e-875c41a9611a",
+    "a167e0f3-df7e-4d52-a9c3-f949145efdab",
+    "79f8b5fb-2cc8-479a-80df-29f7a7cf1a3e"
+  ],
+  female: [
+    "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4",
+    "f786b574-daa5-4673-aa0c-cbe3e8534c02",
+    "62ae83ad-4f6a-430b-af41-a9bede9286ca",
+    "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
+    "2a12b36c-7f9b-4c3a-9f7a-72731b15323a",
+    "f9836c6e-a0bd-460e-9d3c-f7299fa60f94",
+    "e8e5fffb-252c-436d-b842-8879b84445b6",
+    "c46cf1f6-49a1-4d67-9a57-ff859a4046d3"
+  ]
 } as const;
 
 const CARTESIA_VOICES_BY_LANG: Record<

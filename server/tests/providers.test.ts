@@ -188,4 +188,53 @@ describe("Cartesia voice assignment", () => {
     expect(female.path).toContain(":female-v0:");
     expect(male.path).toContain(":male-v0:");
   });
+
+  it("assigns 8 distinct voice ids to 8 same-gender speakers before wrapping", async () => {
+    const voiceIds: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { voice?: { id?: string } };
+      if (body.voice?.id) {
+        voiceIds.push(body.voice.id);
+      }
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+
+    const pipeline = new InMemoryProviderPipeline(
+      { stt: "deepgram", translation: "gemini", tts: "cartesia" },
+      { cartesiaApiKey: "test-key" }
+    );
+
+    const speakers = Array.from({ length: 8 }, (_, i) => `speaker-${i}`);
+    for (const speakerId of speakers) {
+      await pipeline.synthesizeSpeech(
+        synthArgs({ text: "hi", speakerId, voiceGender: "male", targetLanguage: "en" })
+      );
+    }
+
+    expect(voiceIds).toHaveLength(8);
+    expect(new Set(voiceIds).size).toBe(8);
+
+    await pipeline.synthesizeSpeech(
+      synthArgs({ text: "hi", speakerId: "speaker-8", voiceGender: "male", targetLanguage: "en" })
+    );
+    expect(voiceIds).toHaveLength(9);
+    expect(voiceIds.slice(0, 8)).toContain(voiceIds[8]);
+  });
+
+  it("resolveSpeakerVoiceIndex wraps via hash only after the pool is full", () => {
+    const used = new Set<number>();
+    const indices: number[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      const idx = resolveSpeakerVoiceIndex(`s${i}`, 8, used);
+      indices.push(idx);
+      used.add(idx);
+    }
+    expect(new Set(indices).size).toBe(8);
+    expect([...indices].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+
+    const wrapped = resolveSpeakerVoiceIndex("s8", 8, used);
+    expect(wrapped).toBeGreaterThanOrEqual(0);
+    expect(wrapped).toBeLessThan(8);
+    expect(used.has(wrapped)).toBe(true);
+  });
 });
