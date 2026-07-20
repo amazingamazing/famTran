@@ -466,5 +466,139 @@ describe("SessionHub", () => {
     expect(audioMessage).toBeDefined();
     expect(audioMessage.mimeType).toBe("audio/wav");
   });
+
+  it("solo room routes en→ja transcript and TTS back to the speaker", async () => {
+    const soloSocket = new MockSocket();
+    const familySocket = new MockSocket();
+    hub.join(familySocket as never, {
+      type: "session.join",
+      displayName: "Family",
+      language: "ja",
+      mode: "full_audio",
+      contextNotes: "",
+      hearAudio: true
+    });
+
+    const soloId = hub.join(soloSocket as never, {
+      type: "session.join",
+      displayName: "Solo",
+      language: "ja",
+      mode: "full_audio",
+      contextNotes: "",
+      hearAudio: true,
+      roomType: "solo",
+      voiceGender: "male"
+    });
+
+    await hub.handleEvent(soloId, {
+      type: "turn.start",
+      turnId: "solo-en",
+      speakerLanguage: "en",
+      voiceGender: "female"
+    });
+    await hub.handleEvent(soloId, {
+      type: "audio.input",
+      turnId: "solo-en",
+      payloadBase64: Buffer.from("Good morning").toString("base64"),
+      sequence: 0,
+      isLast: true
+    });
+    await hub.handleEvent(soloId, { type: "turn.stop", turnId: "solo-en" });
+
+    const soloEvents = soloSocket.sent.map((item) => JSON.parse(item));
+    const transcript = soloEvents.find((event) => event.type === "transcript.chunk");
+    const audio = soloEvents.find((event) => event.type === "audio.chunk");
+
+    expect(transcript).toBeDefined();
+    expect(transcript.sourceLanguage).toBe("en");
+    expect(transcript.targetLanguage).toBe("ja");
+    expect(transcript.originalText).toBe("Good morning");
+    expect(transcript.translatedText).toBe("Good morning");
+    expect(audio).toBeDefined();
+    expect(audio.targetLanguage).toBe("ja");
+
+    const familyTranscripts = familySocket.sent
+      .map((item) => JSON.parse(item))
+      .filter((event) => event.type === "transcript.chunk");
+    expect(familyTranscripts).toHaveLength(0);
+  });
+
+  it("solo room routes ja→en transcript and TTS back to the speaker", async () => {
+    const soloSocket = new MockSocket();
+    const soloId = hub.join(soloSocket as never, {
+      type: "session.join",
+      displayName: "Solo",
+      language: "en",
+      mode: "full_audio",
+      contextNotes: "",
+      hearAudio: true,
+      roomType: "solo"
+    });
+
+    await hub.handleEvent(soloId, {
+      type: "turn.start",
+      turnId: "solo-ja",
+      speakerLanguage: "ja",
+      voiceGender: "male"
+    });
+    await hub.handleEvent(soloId, {
+      type: "audio.input",
+      turnId: "solo-ja",
+      payloadBase64: Buffer.from("こんにちは").toString("base64"),
+      sequence: 0,
+      isLast: true
+    });
+    await hub.handleEvent(soloId, { type: "turn.stop", turnId: "solo-ja" });
+
+    const soloEvents = soloSocket.sent.map((item) => JSON.parse(item));
+    const transcript = soloEvents.find((event) => event.type === "transcript.chunk");
+    const audio = soloEvents.find((event) => event.type === "audio.chunk");
+
+    expect(transcript).toBeDefined();
+    expect(transcript.sourceLanguage).toBe("ja");
+    expect(transcript.targetLanguage).toBe("en");
+    expect(transcript.originalText).toBe("こんにちは");
+    expect(audio).toBeDefined();
+    expect(audio.targetLanguage).toBe("en");
+  });
+
+  it("solo rooms write nothing to SQLite", async () => {
+    const soloSocket = new MockSocket();
+    const soloId = hub.join(soloSocket as never, {
+      type: "session.join",
+      displayName: "Solo",
+      language: "en",
+      mode: "full_audio",
+      contextNotes: "",
+      hearAudio: true,
+      roomType: "solo"
+    });
+
+    await hub.handleEvent(soloId, {
+      type: "turn.start",
+      turnId: "solo-no-db",
+      speakerLanguage: "en",
+      voiceGender: "female"
+    });
+    await hub.handleEvent(soloId, {
+      type: "audio.input",
+      turnId: "solo-no-db",
+      payloadBase64: Buffer.from("Ephemeral only").toString("base64"),
+      sequence: 0,
+      isLast: true
+    });
+    await hub.handleEvent(soloId, { type: "turn.stop", turnId: "solo-no-db" });
+    await hub.handleEvent(soloId, {
+      type: "correction.submit",
+      wrongText: "x",
+      rightText: "y",
+      context: "should not persist"
+    });
+
+    expect(db.historyForLanguage("en", { limit: 20 })).toHaveLength(0);
+    expect(db.historyForLanguage("ja", { limit: 20 })).toHaveLength(0);
+    expect(db.latestCorrections()).toHaveLength(0);
+    expect(db.latestTurns()).toHaveLength(0);
+  });
 });
 

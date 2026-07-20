@@ -237,4 +237,36 @@ describe("Cartesia voice assignment", () => {
     expect(wrapped).toBeLessThan(8);
     expect(used.has(wrapped)).toBe(true);
   });
+
+  it("voiceSelection first always uses pool index 0 without consuming sequential slots", async () => {
+    const voiceIds: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { voice?: { id?: string } };
+      if (body.voice?.id) {
+        voiceIds.push(body.voice.id);
+      }
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+
+    const pipeline = new InMemoryProviderPipeline(
+      { stt: "deepgram", translation: "gemini", tts: "cartesia" },
+      { cartesiaApiKey: "test-key" }
+    );
+
+    await pipeline.synthesizeSpeech({
+      ...synthArgs({ text: "a", speakerId: "solo-1", voiceGender: "male", targetLanguage: "ja" }),
+      voiceSelection: "first"
+    });
+    await pipeline.synthesizeSpeech({
+      ...synthArgs({ text: "b", speakerId: "solo-2", voiceGender: "male", targetLanguage: "ja" }),
+      voiceSelection: "first"
+    });
+    const sequential = await pipeline.synthesizeSpeech(
+      synthArgs({ text: "c", speakerId: "family-1", voiceGender: "male", targetLanguage: "ja" })
+    );
+
+    expect(voiceIds[0]).toBe(voiceIds[1]);
+    expect(sequential.path).toContain(":male-v0:");
+    expect(voiceIds[2]).toBe(voiceIds[0]);
+  });
 });

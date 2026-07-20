@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-import type { ClientEvent, ServerEvent, SupportedLanguage, VoiceGender } from "@family-translation/shared";
+import type {
+  ClientEvent,
+  RoomType,
+  ServerEvent,
+  SupportedLanguage,
+  VoiceGender
+} from "@family-translation/shared";
 import type { WebSocket } from "ws";
 
 import { appConfig } from "./config.js";
@@ -23,9 +29,13 @@ import type {
   ProviderPipeline,
   SynthesisResult,
   TranscribeForTurnOutput,
+  TranscriptionResult,
   TranslationContext,
   TranslationResult
 } from "./providers.js";
+
+/** Shared multi-device session; every family join lands here. */
+const FAMILY_ROOM_ID = "family";
 
 type SessionParticipant = {
   clientId: string;
@@ -35,14 +45,21 @@ type SessionParticipant = {
   hearAudio: boolean;
   voiceGender: VoiceGender;
   contextNotes: string;
+  roomId: string;
+  roomType: RoomType;
 };
 
 /** Persist both app languages so `/api/history?language=…` works if a viewer was offline during the turn. */
 const VIEWER_HISTORY_LANGUAGES: SupportedLanguage[] = ["en", "ja"];
 
+const oppositeLanguage = (language: SupportedLanguage): SupportedLanguage =>
+  language === "en" ? "ja" : "en";
+
 type ActiveTurn = {
   speakerId: string;
   sourceLanguage: SupportedLanguage;
+  /** Solo: TTS gender for the target language on this utterance. */
+  voiceGender: VoiceGender;
   audioChunks: Buffer[];
   textChunks: string[];
   /** Set when non-hinted PCM is forwarded to Deepgram live (see {@link appConfig.sttStream}). */
@@ -346,11 +363,34 @@ const takeBoundedCompleteSentencesFrom = (
 };
 
 export class SessionHub {
-  /** Everyone in the single family session. */
   private readonly participants = new Map<string, SessionParticipant>();
   private readonly activeTurns = new Map<string, ActiveTurn>();
 
   constructor(private readonly db: AppDb, private readonly providers: ProviderPipeline) {}
+
+  private roomParticipants(roomId: string): SessionParticipant[] {
+    return [...this.participants.values()].filter((p) => p.roomId === roomId);
+  }
+
+  private broadcastToRoom(roomId: string, event: ServerEvent) {
+    for (const participant of this.roomParticipants(roomId)) {
+      this.send(participant.socket, event);
+    }
+  }
+
+  private buildTranslateContext(includeRecentTurns: boolean): TranslationContext {
+    const glossaryLines = this.db
+      .listGlossary()
+      .map((entry) => `${entry.term} -> ${entry.translation} (${entry.notes})`);
+    const correctionLines = this.db
+      .latestCorrections()
+      .map((entry) => `${entry.wrongText} => ${entry.rightText} (${entry.context})`);
+    return {
+      glossaryLines,
+      correctionLines,
+      recentTurns: includeRecentTurns ? this.db.latestTurns() : []
+    };
+  }
 
   /**
    * Portion of `full` that is not already covered by streamed `committed` phrases (word-prefix match,
@@ -397,6 +437,9 @@ export class SessionHub {
 
   join(socket: WebSocket, event: Extract<ClientEvent, { type: "session.join" }>) {
     const clientId = randomUUID();
+    const roomType: RoomType = event.roomType === "solo" ? "solo" : "family";
+    // Solo: fresh private roomId per join (never listed / QR-shareable). Family: shared room.
+    const roomId = roomType === "solo" ? randomUUID() : FAMILY_ROOM_ID;
     this.participants.set(clientId, {
       clientId,
       socket,
@@ -404,10 +447,12 @@ export class SessionHub {
       language: event.language,
       hearAudio: event.hearAudio,
       voiceGender: event.voiceGender ?? "female",
-      contextNotes: event.contextNotes
+      contextNotes: event.contextNotes,
+      roomId,
+      roomType
     });
 
-    this.send(socket, { type: "session.joined", clientId });
+    this.send(socket, { type: "session.joined", clientId, roomType, roomId });
     this.send(socket, {
       type: "providers.updated",
       ...this.providers.getProviders()
@@ -432,10 +477,15 @@ export class SessionHub {
 
   async handleEvent(clientId: string, event: ClientEvent) {
     switch (event.type) {
-      case "turn.start":
+      case "turn.start": {
+        const speaker = this.participants.get(clientId);
+        if (!speaker) {
+          return;
+        }
         this.activeTurns.set(event.turnId, {
           speakerId: clientId,
           sourceLanguage: event.speakerLanguage,
+          voiceGender: event.voiceGender ?? speaker.voiceGender,
           audioChunks: [],
           textChunks: [],
           dgStream: null,
@@ -455,6 +505,7 @@ export class SessionHub {
           this.scheduleForcedCommit(event.turnId, started);
         }
         return;
+      }
       case "audio.input": {
         const turn = this.activeTurns.get(event.turnId);
         if (!turn || turn.speakerId !== clientId) {
@@ -501,7 +552,12 @@ export class SessionHub {
       case "turn.stop":
         await this.completeTurn(event.turnId);
         return;
-      case "correction.submit":
+      case "correction.submit": {
+        const submitter = this.participants.get(clientId);
+        if (!submitter || submitter.roomType === "solo") {
+          // Solo rooms are ephemeral — no SQLite writes.
+          return;
+        }
         this.db.insertCorrection({
           userId: clientId,
           wrongText: event.wrongText,
@@ -509,13 +565,19 @@ export class SessionHub {
           context: event.context ?? ""
         });
         return;
+      }
       case "settings.providers": {
+        const setter = this.participants.get(clientId);
+        if (setter?.roomType === "solo") {
+          // Provider switches are a family-session concern; ignore in solo.
+          return;
+        }
         const selected = this.providers.setProviders({
           stt: event.stt === "openai" ? "openai" : "deepgram",
           translation: event.translation === "openai" ? "openai" : "gemini",
           tts: event.tts === "openai" ? "openai" : "cartesia"
         });
-        this.broadcastToAll({ type: "providers.updated", ...selected });
+        this.broadcastToRoom(FAMILY_ROOM_ID, { type: "providers.updated", ...selected });
         return;
       }
       case "turn.edit":
@@ -535,19 +597,16 @@ export class SessionHub {
     if (!sourceText) {
       return;
     }
+    const editor = this.participants.get(editorClientId);
+    if (!editor || editor.roomType === "solo") {
+      return;
+    }
     const seed = this.db.getTurnForEdit(turnId);
     if (!seed || seed.speakerId !== editorClientId) {
       return;
     }
 
-    const glossaryLines = this.db
-      .listGlossary()
-      .map((entry) => `${entry.term} -> ${entry.translation} (${entry.notes})`);
-    const correctionLines = this.db
-      .latestCorrections()
-      .map((entry) => `${entry.wrongText} => ${entry.rightText} (${entry.context})`);
-    const recentTurns = this.db.latestTurns();
-    const translateContext = { glossaryLines, correctionLines, recentTurns };
+    const translateContext = this.buildTranslateContext(true);
 
     const translatedByLang = new Map<SupportedLanguage, string>();
     for (const lang of seed.targetLanguages) {
@@ -576,7 +635,7 @@ export class SessionHub {
       });
     }
 
-    for (const participant of this.participants.values()) {
+    for (const participant of this.roomParticipants(editor.roomId)) {
       const translatedText = translatedByLang.get(participant.language) ?? sourceText;
       this.send(participant.socket, {
         type: "transcript.edited",
@@ -599,8 +658,8 @@ export class SessionHub {
       return;
     }
     const editor = this.participants.get(editorClientId);
-    if (!editor || editor.hearAudio) {
-      // Translation edits are reserved for bilingual users (hearAudio=false from onboarding choice).
+    if (!editor || editor.hearAudio || editor.roomType === "solo") {
+      // Translation edits are reserved for bilingual family users (hearAudio=false).
       return;
     }
     const row = this.db.getTurnRow(turnId, editor.language);
@@ -627,7 +686,7 @@ export class SessionHub {
     if (!seed) {
       return;
     }
-    for (const participant of this.participants.values()) {
+    for (const participant of this.roomParticipants(editor.roomId)) {
       const targetRow = this.db.getTurnRow(turnId, participant.language);
       if (!targetRow) {
         continue;
@@ -744,16 +803,24 @@ export class SessionHub {
       effectiveSource = remainder;
     }
 
-    const glossaryLines = this.db
-      .listGlossary()
-      .map((entry) => `${entry.term} -> ${entry.translation} (${entry.notes})`);
-    const correctionLines = this.db
-      .latestCorrections()
-      .map((entry) => `${entry.wrongText} => ${entry.rightText} (${entry.context})`);
-    const recentTurns = this.db.latestTurns();
+    if (sourceSpeaker.roomType === "solo") {
+      await this.deliverSoloUtterance({
+        turnId,
+        turn,
+        sourceSpeaker,
+        sourceText: effectiveSource,
+        fullSourceText,
+        transcription,
+        turnTranscription,
+        phraseFinal: false
+      });
+      this.clearForcedCommitSchedule(turn);
+      this.activeTurns.delete(turnId);
+      return;
+    }
 
-    const participants = [...this.participants.values()];
-    const translateContext: TranslationContext = { glossaryLines, correctionLines, recentTurns };
+    const participants = this.roomParticipants(sourceSpeaker.roomId);
+    const translateContext = this.buildTranslateContext(true);
 
     const byLang = await this.persistViewerLanguageHistoryAndGetByLang({
       turnId,
@@ -872,7 +939,7 @@ export class SessionHub {
       };
     });
 
-    this.broadcastToAll({
+    this.broadcastToRoom(sourceSpeaker.roomId, {
       type: "debug.turn",
       turnId,
       speakerId: sourceSpeaker.clientId,
@@ -890,6 +957,112 @@ export class SessionHub {
     });
     this.clearForcedCommitSchedule(turn);
     this.activeTurns.delete(turnId);
+  }
+
+  /**
+   * Solo quick-chat: translate once using turn source language (not profile language),
+   * return transcript + TTS to the same client. No SQLite writes.
+   */
+  private async deliverSoloUtterance(args: {
+    turnId: string;
+    turn: ActiveTurn;
+    sourceSpeaker: SessionParticipant;
+    sourceText: string;
+    fullSourceText: string;
+    transcription: TranscriptionResult;
+    turnTranscription: TranscribeForTurnOutput;
+    phraseFinal: boolean;
+  }) {
+    const { turnId, turn, sourceSpeaker, sourceText, fullSourceText, transcription, turnTranscription } = args;
+    const sourceLanguage = turn.sourceLanguage;
+    const targetLanguage = oppositeLanguage(sourceLanguage);
+    const voiceGender = turn.voiceGender;
+    const translateContext = this.buildTranslateContext(false);
+
+    const translation = await this.providers.translateText({
+      sourceText,
+      sourceLanguage,
+      targetLanguage,
+      context: translateContext
+    });
+    const translatedText = translation.value;
+
+    const speech = await this.providers.synthesizeSpeech({
+      text: translatedText,
+      targetLanguage,
+      speakerId: sourceSpeaker.clientId,
+      voiceGender,
+      voiceSelection: "first"
+    });
+
+    this.send(sourceSpeaker.socket, {
+      type: "transcript.chunk",
+      turnId,
+      speakerId: sourceSpeaker.clientId,
+      speakerDisplayName: sourceSpeaker.displayName,
+      sourceLanguage,
+      targetLanguage,
+      translatedText,
+      originalText: sourceText,
+      isFinal: true,
+      timestamp: Date.now(),
+      debug: {
+        transcriptionPath: transcription.path,
+        transcriptionDetail: transcription.detail,
+        translationPath: translation.path,
+        translationDetail: translation.detail,
+        ttsPath: speech.path
+      }
+    });
+
+    if (speech.value) {
+      this.send(sourceSpeaker.socket, {
+        type: "audio.chunk",
+        turnId,
+        targetLanguage,
+        mimeType: speech.mimeType,
+        payloadBase64: speech.value,
+        sequence: 0,
+        isLast: true,
+        debug: {
+          ttsPath: speech.path,
+          ...(speech.detail ? { ttsDetail: speech.detail } : {})
+        }
+      });
+    }
+
+    // Phrase-stream commits skip debug.turn (family path does the same); end-of-turn emits it.
+    if (!args.phraseFinal) {
+      this.send(sourceSpeaker.socket, {
+        type: "debug.turn",
+        turnId,
+        speakerId: sourceSpeaker.clientId,
+        sourceLanguage,
+        originalText: fullSourceText,
+        timestamp: Date.now(),
+        transcription: {
+          path: transcription.path,
+          detail: transcription.detail,
+          audioChunkCount: turn.audioChunks.length,
+          textHintCount: turn.textChunks.length,
+          sttBenchmark: turnTranscription.sttBenchmark
+        },
+        participants: [
+          {
+            clientId: sourceSpeaker.clientId,
+            displayName: sourceSpeaker.displayName,
+            targetLanguage,
+            isSpeaker: true,
+            hearAudio: true,
+            voiceGender,
+            translatedText,
+            translationPath: translation.path,
+            translationDetail: translation.detail,
+            ttsPath: speech.path
+          }
+        ]
+      });
+    }
   }
 
   /**
@@ -1144,15 +1317,40 @@ export class SessionHub {
     if (committedBefore.length > 0 && combinedCanonKey === turnCanonWords(committedBefore).join(" ")) {
       return;
     }
-    const glossaryLines = this.db
-      .listGlossary()
-      .map((entry) => `${entry.term} -> ${entry.translation} (${entry.notes})`);
-    const correctionLines = this.db
-      .latestCorrections()
-      .map((entry) => `${entry.wrongText} => ${entry.rightText} (${entry.context})`);
-    const recentTurns = this.db.latestTurns();
-    const participants = [...this.participants.values()];
-    const translateContext: TranslationContext = { glossaryLines, correctionLines, recentTurns };
+    if (sourceSpeaker.roomType === "solo") {
+      const streamPath = this.deepgramStreamTranscriptionPath();
+      await this.deliverSoloUtterance({
+        turnId: args.turnId,
+        turn,
+        sourceSpeaker,
+        sourceText,
+        fullSourceText: sourceText,
+        transcription: {
+          value: sourceText,
+          path: streamPath,
+          detail: "phrase_final"
+        },
+        turnTranscription: {
+          result: {
+            value: sourceText,
+            path: streamPath,
+            detail: "phrase_final"
+          }
+        },
+        phraseFinal: true
+      });
+      const soloTail = this.activeTurns.get(args.turnId);
+      if (soloTail) {
+        const acc = soloTail.committedStreamSource.trim();
+        const piece = sourceText.trim();
+        soloTail.committedStreamSource = acc ? `${acc} ${piece}` : piece;
+        soloTail.lastForcedCommitAtMs = Date.now();
+      }
+      return;
+    }
+
+    const participants = this.roomParticipants(sourceSpeaker.roomId);
+    const translateContext = this.buildTranslateContext(true);
 
     const byLang = await this.persistViewerLanguageHistoryAndGetByLang({
       turnId: args.turnId,
@@ -1283,11 +1481,14 @@ export class SessionHub {
       return;
     }
     const transcription = args.turnTranscription.result;
-    const participants = [...this.participants.values()];
+    const participants = this.roomParticipants(sourceSpeaker.roomId);
     const participantDebugRows = participants.map((participant) => ({
       clientId: participant.clientId,
       displayName: participant.displayName,
-      targetLanguage: participant.language,
+      targetLanguage:
+        sourceSpeaker.roomType === "solo"
+          ? oppositeLanguage(args.turn.sourceLanguage)
+          : participant.language,
       isSpeaker: participant.clientId === args.turn.speakerId,
       hearAudio: participant.hearAudio,
       voiceGender: participant.voiceGender,
@@ -1300,7 +1501,7 @@ export class SessionHub {
       ttsPath: undefined
     }));
 
-    this.broadcastToAll({
+    this.broadcastToRoom(sourceSpeaker.roomId, {
       type: "debug.turn",
       turnId: args.turnId,
       speakerId: sourceSpeaker.clientId,
@@ -1359,12 +1560,6 @@ export class SessionHub {
       return;
     }
     socket.send(JSON.stringify(event));
-  }
-
-  private broadcastToAll(event: ServerEvent) {
-    for (const participant of this.participants.values()) {
-      this.send(participant.socket, event);
-    }
   }
 }
 

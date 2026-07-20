@@ -135,6 +135,11 @@ type SynthInput = {
   targetLanguage: SupportedLanguage;
   speakerId: string;
   voiceGender: VoiceGender;
+  /**
+   * `sequential` (default): stable per-speaker indices that avoid collisions.
+   * `first`: always pool index 0 for the gender/language (solo quick-chat).
+   */
+  voiceSelection?: "sequential" | "first";
 };
 
 type ProviderSecrets = {
@@ -525,7 +530,8 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
         const { voiceId, voiceIndex, voiceGender } = this.pickCartesiaVoice(
           args.targetLanguage,
           args.speakerId,
-          args.voiceGender
+          args.voiceGender,
+          args.voiceSelection ?? "sequential"
         );
         const t0 = Date.now();
         const response = await fetchWithTimeout(
@@ -642,11 +648,16 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
   private pickCartesiaVoice(
     targetLanguage: SupportedLanguage,
     speakerId: string,
-    voiceGender: VoiceGender
+    voiceGender: VoiceGender,
+    voiceSelection: "sequential" | "first" = "sequential"
   ): { voiceId: string; voiceIndex: number; voiceGender: VoiceGender } {
+    const pool = CARTESIA_VOICES_BY_LANG[targetLanguage][voiceGender];
+    if (voiceSelection === "first") {
+      return { voiceId: pool[0], voiceIndex: 0, voiceGender };
+    }
+
     this.invalidateSpeakerVoiceCacheForOtherGenders(targetLanguage, speakerId, voiceGender);
 
-    const pool = CARTESIA_VOICES_BY_LANG[targetLanguage][voiceGender];
     const cacheKey = `${targetLanguage}:${voiceGender}:${speakerId}`;
     const cachedIndex = this.cartesiaVoiceIndexBySpeakerLang.get(cacheKey);
     const usedIndices = this.cartesiaUsedIndicesByLangGender[targetLanguage][voiceGender];

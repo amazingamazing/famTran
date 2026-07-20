@@ -16,10 +16,15 @@ export type ProviderType = "deepgram" | "openai" | "gemini" | "cartesia";
 
 export type ClientMode = "text_only" | "full_audio";
 
+/** Shared multi-device family session vs ephemeral single-phone quick-chat. */
+export type RoomType = "family" | "solo";
+
 export type ServerEvent =
   | {
       type: "session.joined";
       clientId: string;
+      roomType?: RoomType;
+      roomId?: string;
     }
   | {
       type: "transcript.chunk";
@@ -139,11 +144,18 @@ export type ClientEvent =
       contextNotes: string;
       hearAudio: boolean;
       voiceGender?: VoiceGender;
+      /** Defaults to "family". Solo creates an ephemeral private room (no QR/join). */
+      roomType?: RoomType;
     }
   | {
       type: "turn.start";
       turnId: string;
       speakerLanguage: SupportedLanguage;
+      /**
+       * Solo rooms: TTS gender for the *target* language on this utterance.
+       * Family rooms ignore this and use the speaker's join voiceGender.
+       */
+      voiceGender?: VoiceGender;
     }
   | {
       type: "audio.input";
