@@ -113,6 +113,11 @@ export type AppCopy = {
   onboardingBack: string;
   onboardingNameRequired: string;
   onboardingGlossaryWarning: string;
+  modeSwitchToQuickChat: string;
+  modeSwitchToRooms: string;
+  quickChatTitle: string;
+  quickChatGenderForJa: string;
+  quickChatGenderForEn: string;
 };
 
 const EN: AppCopy = {
@@ -228,7 +233,12 @@ const EN: AppCopy = {
   onboardingBack: "Back",
   onboardingNameRequired: "Please enter the name your family should see.",
   onboardingGlossaryWarning:
-    "Could not save your name on the server yet. You can add it under Glossary after you connect."
+    "Could not save your name on the server yet. You can add it under Glossary after you connect.",
+  modeSwitchToQuickChat: "Quick Chat",
+  modeSwitchToRooms: "Rooms",
+  quickChatTitle: "Quick Chat",
+  quickChatGenderForJa: "Voice for Japanese translation",
+  quickChatGenderForEn: "Voice for English translation"
 };
 
 const JA: AppCopy = {
@@ -334,7 +344,12 @@ const JA: AppCopy = {
   onboardingBack: "戻る",
   onboardingNameRequired: "表示する名前を入力してください。",
   onboardingGlossaryWarning:
-    "まだサーバーに名前を保存できませんでした。接続後、用語集から追加できます。"
+    "まだサーバーに名前を保存できませんでした。接続後、用語集から追加できます。",
+  modeSwitchToQuickChat: "クイックチャット",
+  modeSwitchToRooms: "ルーム",
+  quickChatTitle: "クイックチャット",
+  quickChatGenderForJa: "日本語訳の声",
+  quickChatGenderForEn: "英語訳の声"
 };
 
 /** Japanese onboarding step labels that stay Japanese in JA mode (Understand yes/no). */

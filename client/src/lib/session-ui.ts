@@ -1,7 +1,37 @@
 export const CONTROLS_EXPANDED_STORAGE_KEY = "family_translation_controls_expanded";
 
+/** TTS gender when translating into Japanese (Quick Chat left button badge). */
+export const QC_TTS_GENDER_JA_KEY = "family_translation_qc_tts_gender_ja";
+/** TTS gender when translating into English (Quick Chat right button badge). */
+export const QC_TTS_GENDER_EN_KEY = "family_translation_qc_tts_gender_en";
+
 export const ONBOARDING_DONE_COOKIE = "family_translation_onboarding_done";
 export const GLOSSARY_USER_ID_COOKIE = "family_translation_glossary_user_id";
+
+export const parseStoredVoiceGender = (value: string | null | undefined): "male" | "female" =>
+  value === "male" ? "male" : "female";
+
+export const readQcTtsGender = (
+  storage: Pick<Storage, "getItem"> | null,
+  key: string,
+  fallback: "male" | "female"
+): "male" | "female" => {
+  if (!storage) {
+    return fallback;
+  }
+  return parseStoredVoiceGender(storage.getItem(key) ?? fallback);
+};
+
+export const writeQcTtsGender = (
+  storage: Pick<Storage, "setItem"> | null,
+  key: string,
+  gender: "male" | "female"
+) => {
+  if (!storage) {
+    return;
+  }
+  storage.setItem(key, gender);
+};
 
 export const getOrCreateGlossaryUserId = (
   getCookie: (name: string) => string,

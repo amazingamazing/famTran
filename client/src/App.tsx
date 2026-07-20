@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ProviderType, ServerEvent, SupportedLanguage, VoiceGender } from "@family-translation/shared";
+import type {
+  ProviderType,
+  RoomType,
+  ServerEvent,
+  SupportedLanguage,
+  VoiceGender
+} from "@family-translation/shared";
 
 import "./App.css";
 import { appStrings } from "./lib/app-strings";
@@ -12,9 +18,15 @@ import {
   isMicStopNoOp,
   MIC_STOP_GRACE_MS,
   ONBOARDING_DONE_COOKIE,
+  QC_TTS_GENDER_EN_KEY,
+  QC_TTS_GENDER_JA_KEY,
+  readQcTtsGender,
   shouldAutoConnectFromSavedSession,
-  shouldRunMicStop
+  shouldRunMicStop,
+  writeQcTtsGender
 } from "./lib/session-ui";
+
+type AppMode = "rooms" | "quickChat";
 
 type HistoryApiMessage = {
   id: number;
@@ -89,7 +101,9 @@ function ChatMessageRow({
   editTranslationLabel,
   saveEditLabel,
   cancelEditLabel,
-  editedLabel
+  editedLabel,
+  alwaysShowOriginal = false,
+  hideSpeakerMeta = false
 }: {
   item: TranscriptRow;
   showOriginalLabel: string;
@@ -104,6 +118,10 @@ function ChatMessageRow({
   saveEditLabel: string;
   cancelEditLabel: string;
   editedLabel: string;
+  /** Quick Chat: always show muted original under the translation. */
+  alwaysShowOriginal?: boolean;
+  /** Quick Chat: omit speaker/edit chrome. */
+  hideSpeakerMeta?: boolean;
 }) {
   const [metaOpen, setMetaOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -112,72 +130,75 @@ function ChatMessageRow({
   const hasOriginal =
     item.originalText.trim().length > 0 && item.originalText.trim() !== item.translatedText.trim();
   const isEdited = item.editedAt != null;
+  const showOriginal = alwaysShowOriginal ? hasOriginal : hasOriginal && metaOpen;
   return (
     <li className={`chatMessage ${isEdited ? "chatMessageEdited" : ""}`} data-turn-id={item.turnId}>
-      <div className="chatMeta">
-        <div className="chatMetaLeft">
-          <span className="chatSpeaker">{item.speakerDisplayName}</span>
-          {isEdited ? <span className="chatEditedBadge">{editedLabel}</span> : null}
-          {hasOriginal ? (
-            <button
-              type="button"
-              className="chatToggleOriginalIcon"
-              onClick={() => setMetaOpen((open) => !open)}
-              aria-expanded={metaOpen}
-              aria-label={metaOpen ? hideOriginalLabel : showOriginalLabel}
-              title={metaOpen ? hideOriginalLabel : showOriginalLabel}
-            >
-              <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
-            </button>
-          ) : null}
-          {canEditSource ? (
-            <button
-              type="button"
-              className="chatToggleOriginalIcon"
-              onClick={() => {
-                setDraft(item.originalText);
-                setEditTarget("source");
-                setEditOpen(true);
-              }}
-              aria-expanded={editOpen}
-              aria-label={editMessageLabel}
-              title={editMessageLabel}
-            >
-              <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M12 20h9" />
-                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-              </svg>
-            </button>
-          ) : null}
-          {canEditTranslation ? (
-            <button
-              type="button"
-              className="chatToggleOriginalIcon"
-              onClick={() => {
-                setDraft(item.translatedText);
-                setEditTarget("translation");
-                setEditOpen(true);
-              }}
-              aria-expanded={editOpen}
-              aria-label={editTranslationLabel}
-              title={editTranslationLabel}
-            >
-              <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M5 8h14M5 12h8M5 16h10" />
-                <path d="M17 3l4 4-7 7-4 1 1-4 6-8Z" />
-              </svg>
-            </button>
-          ) : null}
+      {hideSpeakerMeta ? null : (
+        <div className="chatMeta">
+          <div className="chatMetaLeft">
+            <span className="chatSpeaker">{item.speakerDisplayName}</span>
+            {isEdited ? <span className="chatEditedBadge">{editedLabel}</span> : null}
+            {hasOriginal && !alwaysShowOriginal ? (
+              <button
+                type="button"
+                className="chatToggleOriginalIcon"
+                onClick={() => setMetaOpen((open) => !open)}
+                aria-expanded={metaOpen}
+                aria-label={metaOpen ? hideOriginalLabel : showOriginalLabel}
+                title={metaOpen ? hideOriginalLabel : showOriginalLabel}
+              >
+                <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              </button>
+            ) : null}
+            {canEditSource ? (
+              <button
+                type="button"
+                className="chatToggleOriginalIcon"
+                onClick={() => {
+                  setDraft(item.originalText);
+                  setEditTarget("source");
+                  setEditOpen(true);
+                }}
+                aria-expanded={editOpen}
+                aria-label={editMessageLabel}
+                title={editMessageLabel}
+              >
+                <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                </svg>
+              </button>
+            ) : null}
+            {canEditTranslation ? (
+              <button
+                type="button"
+                className="chatToggleOriginalIcon"
+                onClick={() => {
+                  setDraft(item.translatedText);
+                  setEditTarget("translation");
+                  setEditOpen(true);
+                }}
+                aria-expanded={editOpen}
+                aria-label={editTranslationLabel}
+                title={editTranslationLabel}
+              >
+                <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M5 8h14M5 12h8M5 16h10" />
+                  <path d="M17 3l4 4-7 7-4 1 1-4 6-8Z" />
+                </svg>
+              </button>
+            ) : null}
+          </div>
+          <time className="chatTime" dateTime={new Date(item.timestamp).toISOString()}>
+            {new Date(item.timestamp).toLocaleString(timeLocale)}
+          </time>
         </div>
-        <time className="chatTime" dateTime={new Date(item.timestamp).toISOString()}>
-          {new Date(item.timestamp).toLocaleString(timeLocale)}
-        </time>
-      </div>
+      )}
       <p className="chatBubbleMain">{item.translatedText}</p>
-      {hasOriginal && metaOpen ? <p className="chatBubbleOriginal">{item.originalText}</p> : null}
+      {showOriginal ? <p className="chatBubbleOriginal">{item.originalText}</p> : null}
       {editOpen ? (
         <div className="chatEditBox">
           <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} />
@@ -352,7 +373,7 @@ function App() {
   const micFinishingRef = useRef(false);
   const micStopGraceTimerRef = useRef<number | null>(null);
   const autoConnectAttemptedRef = useRef(false);
-  const connectRef = useRef<() => void>(() => undefined);
+  const connectRef = useRef<(opts?: { roomType?: RoomType }) => void>(() => undefined);
   const stopMicTestRef = useRef<(opts?: { immediate?: boolean }) => Promise<void>>(async () => {});
   const onboardingDoneInit = getCookie(ONBOARDING_DONE_COOKIE) === "true";
   const [onboardingDone, setOnboardingDone] = useState(onboardingDoneInit);
@@ -375,6 +396,23 @@ function App() {
   );
   const [voiceGender, setVoiceGender] = useState<VoiceGender>(() =>
     onboardingDoneInit ? parseVoiceGender(getCookie("family_translation_voice_gender")) : "female"
+  );
+  const [appMode, setAppMode] = useState<AppMode>("rooms");
+  const appModeRef = useRef<AppMode>("rooms");
+  const [qcSpeaking, setQcSpeaking] = useState<SupportedLanguage | null>(null);
+  const [qcGenderJa, setQcGenderJa] = useState<VoiceGender>(() =>
+    readQcTtsGender(
+      typeof localStorage === "undefined" ? null : localStorage,
+      QC_TTS_GENDER_JA_KEY,
+      onboardingDoneInit ? parseVoiceGender(getCookie("family_translation_voice_gender")) : "female"
+    )
+  );
+  const [qcGenderEn, setQcGenderEn] = useState<VoiceGender>(() =>
+    readQcTtsGender(
+      typeof localStorage === "undefined" ? null : localStorage,
+      QC_TTS_GENDER_EN_KEY,
+      onboardingDoneInit ? parseVoiceGender(getCookie("family_translation_voice_gender")) : "female"
+    )
   );
   const [connected, setConnected] = useState(false);
   const [clientId, setClientId] = useState("");
@@ -599,6 +637,26 @@ function App() {
   }, [voiceGender]);
 
   useEffect(() => {
+    appModeRef.current = appMode;
+  }, [appMode]);
+
+  useEffect(() => {
+    writeQcTtsGender(
+      typeof localStorage === "undefined" ? null : localStorage,
+      QC_TTS_GENDER_JA_KEY,
+      qcGenderJa
+    );
+  }, [qcGenderJa]);
+
+  useEffect(() => {
+    writeQcTtsGender(
+      typeof localStorage === "undefined" ? null : localStorage,
+      QC_TTS_GENDER_EN_KEY,
+      qcGenderEn
+    );
+  }, [qcGenderEn]);
+
+  useEffect(() => {
     setCookie("family_translation_context_notes", contextNotes);
   }, [contextNotes]);
 
@@ -615,7 +673,11 @@ function App() {
   }, [providerTts]);
 
   useEffect(() => {
-    if (!onboardingDone) {
+    if (!onboardingDone || appMode === "quickChat") {
+      if (appMode === "quickChat") {
+        setHistoryLoading(false);
+        setHistoryHasMore(false);
+      }
       return;
     }
     let cancelled = false;
@@ -645,7 +707,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [onboardingDone, language]);
+  }, [onboardingDone, language, appMode]);
 
   useEffect(() => {
     if (historyLoading || !onboardingDone) {
@@ -662,7 +724,7 @@ function App() {
   }, [historyLoading, onboardingDone, language]);
 
   const loadOlderHistory = useCallback(async () => {
-    if (!onboardingDone || !historyHasMore || loadingOlderRef.current) {
+    if (!onboardingDone || appMode === "quickChat" || !historyHasMore || loadingOlderRef.current) {
       return;
     }
     const ids = transcripts.map((row) => row.historyId).filter((id): id is number => id != null);
@@ -693,7 +755,7 @@ function App() {
       loadingOlderRef.current = false;
       setLoadingOlder(false);
     }
-  }, [historyHasMore, language, onboardingDone, transcripts, updateChatScrollPin]);
+  }, [appMode, historyHasMore, language, onboardingDone, transcripts, updateChatScrollPin]);
 
   useEffect(() => {
     if (!onboardingDone) {
@@ -821,15 +883,18 @@ function App() {
     }, delay);
   };
 
-  const connect = () => {
+  const connect = (opts?: { roomType?: RoomType }) => {
     if (!displayName.trim()) {
       setStatusMessage(S.statusSetNameFirst);
       return;
     }
+    const roomType: RoomType =
+      opts?.roomType ?? (appModeRef.current === "quickChat" ? "solo" : "family");
+    const solo = roomType === "solo";
     wsRef.current?.close();
     const ws = new WebSocket(WS_BASE_URL);
     wsRef.current = ws;
-    addDebugEvent(`socket.connecting lang=${language}`);
+    addDebugEvent(`socket.connecting lang=${language} roomType=${roomType}`);
 
     ws.onopen = () => {
       setStatusMessage(S.statusSocketConnected);
@@ -839,10 +904,11 @@ function App() {
           type: "session.join",
           displayName,
           language,
-          mode: "text_only",
+          mode: solo ? "full_audio" : "text_only",
           contextNotes,
-          hearAudio,
-          voiceGender
+          hearAudio: solo ? true : hearAudio,
+          voiceGender,
+          roomType
         })
       );
     };
@@ -1072,6 +1138,7 @@ function App() {
     micFinishingRef.current = false;
     setMicFinishing(false);
     setMicTestActive(false);
+    setQcSpeaking(null);
   };
 
   const stopMicTest = async (options?: { immediate?: boolean }) => {
@@ -1111,7 +1178,10 @@ function App() {
     stopMicTestRef.current = stopMicTest;
   });
 
-  const startMicTest = async () => {
+  const startMicTest = async (opts?: {
+    sourceLanguage?: SupportedLanguage;
+    voiceGender?: VoiceGender;
+  }) => {
     if (!connected || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       setStatusMessage(S.statusConnectBeforeMic);
       return;
@@ -1128,12 +1198,16 @@ function App() {
       const turnId = createTurnId();
       micTurnIdRef.current = turnId;
       micSequenceRef.current = 0;
+      const speakerLanguage = opts?.sourceLanguage ?? language;
+      const turnVoiceGender = opts?.voiceGender ?? voiceGender;
+      const solo = appModeRef.current === "quickChat";
 
       wsRef.current.send(
         JSON.stringify({
           type: "turn.start",
           turnId,
-          speakerLanguage: language
+          speakerLanguage,
+          ...(solo ? { voiceGender: turnVoiceGender } : {})
         })
       );
 
@@ -1159,7 +1233,12 @@ function App() {
 
       micCaptureRef.current = capture;
       setMicTestActive(true);
-      addDebugEvent(`mic.start turn=${turnId} sampleRate=${capture.sampleRate} worklet=pcm-capture-processor`);
+      if (solo && opts?.sourceLanguage) {
+        setQcSpeaking(opts.sourceLanguage);
+      }
+      addDebugEvent(
+        `mic.start turn=${turnId} lang=${speakerLanguage} sampleRate=${capture.sampleRate} worklet=pcm-capture-processor`
+      );
     } catch {
       setStatusMessage(S.statusMicFailed);
       addDebugEvent("mic.start.failed");
@@ -1173,6 +1252,51 @@ function App() {
     } else {
       await startMicTest();
     }
+  };
+
+  const toggleQcSpeak = async (sourceLanguage: SupportedLanguage) => {
+    if (!connected) {
+      setMenuOpen(true);
+      return;
+    }
+    if (micFinishing) {
+      return;
+    }
+    if (qcSpeaking === sourceLanguage) {
+      await stopMicTest();
+      return;
+    }
+    if (micTestActive || qcSpeaking) {
+      return;
+    }
+    // TTS gender for the *target* language = badge on that language's button.
+    const targetGender = sourceLanguage === "ja" ? qcGenderEn : qcGenderJa;
+    if (!playbackUnlocked) {
+      void unlockPlaybackAudio();
+    }
+    await startMicTest({ sourceLanguage, voiceGender: targetGender });
+  };
+
+  const discardSessionAndSwitchMode = async (next: AppMode) => {
+    await stopMicTest({ immediate: true });
+    autoPilotEnabledRef.current = false;
+    setAutoPilotEnabled(false);
+    clearAutoPilotTimer();
+    wsRef.current?.close();
+    wsRef.current = null;
+    setConnected(false);
+    clientIdRef.current = "";
+    setClientId("");
+    setTranscripts([]);
+    setLiveCaption(null);
+    setQcSpeaking(null);
+    setMenuOpen(false);
+    setAppMode(next);
+    setStatusMessage(S.statusNotConnected);
+    addDebugEvent(`app.mode=${next}`);
+    queueMicrotask(() => {
+      connect({ roomType: next === "quickChat" ? "solo" : "family" });
+    });
   };
 
   const submitTurn = () => {
@@ -1482,6 +1606,246 @@ function App() {
     );
   }
 
+  if (appMode === "quickChat") {
+    const jaRecording = qcSpeaking === "ja" && (micTestActive || micFinishing);
+    const enRecording = qcSpeaking === "en" && (micTestActive || micFinishing);
+    const jaDisabled = Boolean(qcSpeaking && qcSpeaking !== "ja") || micFinishing;
+    const enDisabled = Boolean(qcSpeaking && qcSpeaking !== "en") || micFinishing;
+
+    return (
+      <main className="coreShell quickChatShell">
+        <header className="coreHeader">
+          <div className="coreStatusWrap">
+            {connected ? (
+              <span className="coreStatusOnline">{S.online}</span>
+            ) : (
+              <button
+                type="button"
+                className="coreStatusReconnect"
+                onClick={() => connect({ roomType: "solo" })}
+              >
+                {S.reconnect}
+              </button>
+            )}
+          </div>
+          <div className="coreHeaderMain">
+            <span className="coreBrand">{S.quickChatTitle}</span>
+            <span className="coreUserName">{displayName.trim() || "—"}</span>
+          </div>
+          <button
+            type="button"
+            className="coreHamburger"
+            onClick={() => setMenuOpen(true)}
+            aria-label={S.menuAria}
+          >
+            <span className="coreHamburgerBars" aria-hidden>
+              <span className="coreHamburgerBar" />
+              <span className="coreHamburgerBar" />
+              <span className="coreHamburgerBar" />
+            </span>
+          </button>
+        </header>
+
+        {!permissionReady ? (
+          <div className="permissionPrompt">
+            <p className="permissionPromptTitle">{S.micWarmupTitle}</p>
+            <p className="permissionPromptBody">{S.micWarmupBody}</p>
+            <button type="button" onClick={() => void runPermissionWarmup()}>
+              {S.micWarmupAction}
+            </button>
+          </div>
+        ) : null}
+
+        <section className="quickChatTalk" aria-label={S.quickChatTitle}>
+          <div
+            className={`qcLangBtn ${
+              !connected
+                ? "qcLangBtnDisabled"
+                : jaDisabled
+                  ? "qcLangBtnLocked"
+                  : jaRecording
+                    ? micFinishing
+                      ? "qcLangBtnFinishing"
+                      : "qcLangBtnRecording"
+                    : "qcLangBtnIdle"
+            }`}
+            role="button"
+            tabIndex={connected && !jaDisabled ? 0 : -1}
+            onClick={() => {
+              if (jaDisabled && qcSpeaking !== "ja") {
+                return;
+              }
+              void toggleQcSpeak("ja");
+            }}
+            onKeyDown={(event) => {
+              if (jaDisabled && qcSpeaking !== "ja") {
+                return;
+              }
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                void toggleQcSpeak("ja");
+              }
+            }}
+          >
+            <button
+              type="button"
+              className="qcGenderBadge"
+              aria-label={S.quickChatGenderForJa}
+              title={S.quickChatGenderForJa}
+              onClick={(event) => {
+                event.stopPropagation();
+                setQcGenderJa((g) => (g === "female" ? "male" : "female"));
+              }}
+            >
+              {qcGenderJa === "female" ? "♀" : "♂"}
+            </button>
+            <p className="qcLangLabel">日本語で話す</p>
+            {jaRecording && liveCaption ? (
+              <p className="pttLiveDraft" aria-live="polite">
+                {liveCaption.translatedText}
+              </p>
+            ) : null}
+          </div>
+
+          <div
+            className={`qcLangBtn ${
+              !connected
+                ? "qcLangBtnDisabled"
+                : enDisabled
+                  ? "qcLangBtnLocked"
+                  : enRecording
+                    ? micFinishing
+                      ? "qcLangBtnFinishing"
+                      : "qcLangBtnRecording"
+                    : "qcLangBtnIdle"
+            }`}
+            role="button"
+            tabIndex={connected && !enDisabled ? 0 : -1}
+            onClick={() => {
+              if (enDisabled && qcSpeaking !== "en") {
+                return;
+              }
+              void toggleQcSpeak("en");
+            }}
+            onKeyDown={(event) => {
+              if (enDisabled && qcSpeaking !== "en") {
+                return;
+              }
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                void toggleQcSpeak("en");
+              }
+            }}
+          >
+            <button
+              type="button"
+              className="qcGenderBadge"
+              aria-label={S.quickChatGenderForEn}
+              title={S.quickChatGenderForEn}
+              onClick={(event) => {
+                event.stopPropagation();
+                setQcGenderEn((g) => (g === "female" ? "male" : "female"));
+              }}
+            >
+              {qcGenderEn === "female" ? "♀" : "♂"}
+            </button>
+            <p className="qcLangLabel">Speak English</p>
+            {enRecording && liveCaption ? (
+              <p className="pttLiveDraft" aria-live="polite">
+                {liveCaption.translatedText}
+              </p>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="quickChatTranscript" aria-label={S.chatConversation}>
+          <div
+            className="coreChatScroller quickChatScroller"
+            ref={threadRef}
+            onScroll={() => updateChatScrollPin()}
+          >
+            <ul className="chatMessageList">
+              {orderedMessages.map((item) => (
+                <ChatMessageRow
+                  key={`qc-${item.turnId}-${item.timestamp}`}
+                  item={item}
+                  showOriginalLabel={S.showOriginal}
+                  hideOriginalLabel={S.hideOriginal}
+                  timeLocale={timeLocale}
+                  canEditSource={false}
+                  canEditTranslation={false}
+                  onSubmitSourceEdit={submitEditedTurn}
+                  onSubmitTranslationEdit={submitTranslatedEdit}
+                  editMessageLabel={S.editMessage}
+                  editTranslationLabel={S.editTranslation}
+                  saveEditLabel={S.saveEdit}
+                  cancelEditLabel={S.cancelEdit}
+                  editedLabel={S.editedMessage}
+                  alwaysShowOriginal
+                  hideSpeakerMeta
+                />
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        {menuOpen ? (
+          <button
+            type="button"
+            className="drawerBackdrop"
+            aria-label={S.drawerClose}
+            onClick={() => setMenuOpen(false)}
+          />
+        ) : null}
+
+        {menuOpen ? (
+          <aside className="settingsDrawer">
+            <div className="settingsDrawerInner panel">
+              <div className="drawerHeader">
+                <h2 className="drawerTitle">{S.drawerTitle}</h2>
+                <button type="button" className="drawerCloseBtn" onClick={() => setMenuOpen(false)}>
+                  {S.drawerClose}
+                </button>
+              </div>
+              <div className="drawerScroll">
+                <button
+                  type="button"
+                  className="modeSwitchBtn"
+                  onClick={() => void discardSessionAndSwitchMode("rooms")}
+                >
+                  Rooms
+                </button>
+                <p className={`drawerNet ${networkOnline ? "ok" : "warn"}`}>
+                  {networkOnline ? S.online : S.offline}
+                </p>
+                <div className="drawerToolbar">
+                  <button type="button" onClick={copyDebugBlob}>
+                    {S.copyDebugBlob}
+                  </button>
+                  {!playbackUnlocked ? (
+                    <AudioUnlockButton
+                      onClick={() => void unlockPlaybackAudio()}
+                      label={S.enableAudioPlayback}
+                    />
+                  ) : null}
+                </div>
+                <div className="drawerSection actions">
+                  <button type="button" onClick={() => connect({ roomType: "solo" })}>
+                    {S.connect}
+                  </button>
+                  <button type="button" onClick={disconnect}>
+                    {S.disconnect}
+                  </button>
+                </div>
+                <p className="drawerStatus">{statusMessage}</p>
+              </div>
+            </div>
+          </aside>
+        ) : null}
+      </main>
+    );
+  }
+
   return (
     <main className="coreShell">
       <header className="coreHeader">
@@ -1489,7 +1853,7 @@ function App() {
           {connected ? (
             <span className="coreStatusOnline">{S.online}</span>
           ) : (
-            <button type="button" className="coreStatusReconnect" onClick={connect}>
+            <button type="button" className="coreStatusReconnect" onClick={() => connect()}>
               {S.reconnect}
             </button>
           )}
@@ -1634,6 +1998,15 @@ function App() {
               </button>
             </div>
             <div className="drawerScroll">
+              <button
+                type="button"
+                className="modeSwitchBtn"
+                onClick={() =>
+                  void discardSessionAndSwitchMode(appMode === "rooms" ? "quickChat" : "rooms")
+                }
+              >
+                {appMode === "rooms" ? "Quick Chat" : "Rooms"}
+              </button>
               <p className={`drawerNet ${networkOnline ? "ok" : "warn"}`}>
                 {networkOnline ? S.online : S.offline}
               </p>
