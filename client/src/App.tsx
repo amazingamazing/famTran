@@ -2145,7 +2145,7 @@ function App() {
                   />
                 </label>
                 <div className="actions full">
-                  <button type="button" onClick={connect} disabled={connected}>
+                  <button type="button" onClick={() => connect()} disabled={connected}>
                     {S.connect}
                   </button>
                   <button type="button" onClick={disconnect}>
