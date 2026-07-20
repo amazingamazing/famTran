@@ -102,6 +102,9 @@ export const resolveSpeakerVoiceIndex = (
 
 export const isGemini3FamilyModel = (model: string) => model.startsWith("gemini-3");
 
+/** Primary stays env/default gemini-3.1-flash-lite; this is the generateContent fallback. */
+export const GEMINI_TRANSLATION_FALLBACK_MODEL = "gemini-3.5-flash";
+
 export const buildGeminiGenerateContentBody = (prompt: string, model: string) => {
   const body: Record<string, unknown> = {
     contents: [{ role: "user", parts: [{ text: prompt }] }]
@@ -443,7 +446,10 @@ export class InMemoryProviderPipeline implements ProviderPipeline {
         `Text: ${args.sourceText}`
       ].join("\n");
 
-      const modelsToTry = [this.secrets.geminiModel ?? "gemini-3.1-flash-lite", "gemini-2.5-flash"];
+      const modelsToTry = [
+        this.secrets.geminiModel ?? "gemini-3.1-flash-lite",
+        GEMINI_TRANSLATION_FALLBACK_MODEL
+      ];
       let geminiFailureDetail = "unknown";
       for (const model of modelsToTry) {
         let lastDetail = "";

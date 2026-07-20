@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildGeminiGenerateContentBody,
+  GEMINI_TRANSLATION_FALLBACK_MODEL,
   InMemoryProviderPipeline,
   isGemini3FamilyModel,
   resolveSpeakerVoiceIndex,
@@ -26,8 +27,13 @@ describe("Gemini provider helpers", () => {
   it("detects Gemini 3 family models by prefix", () => {
     expect(isGemini3FamilyModel("gemini-3.1-flash-lite")).toBe(true);
     expect(isGemini3FamilyModel("gemini-3-flash-preview")).toBe(true);
+    expect(isGemini3FamilyModel("gemini-3.5-flash")).toBe(true);
     expect(isGemini3FamilyModel("gemini-2.5-flash")).toBe(false);
     expect(isGemini3FamilyModel("gemini-2.0-flash")).toBe(false);
+  });
+
+  it("uses gemini-3.5-flash as the translation fallback model id", () => {
+    expect(GEMINI_TRANSLATION_FALLBACK_MODEL).toBe("gemini-3.5-flash");
   });
 
   it("adds minimal thinkingConfig for Gemini 3 models", () => {

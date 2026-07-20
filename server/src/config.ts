@@ -25,7 +25,7 @@ export const appConfig = {
   sttBenchmark: process.env.STT_BENCHMARK === "1" || process.env.STT_BENCHMARK === "true",
   /** When true, mic PCM is sent to Deepgram over a live WebSocket; disabled automatically when sttBenchmark is on (batch-only benchmark). */
   sttStream: process.env.STT_STREAM === "1" || process.env.STT_STREAM === "true",
-  /** Live STT model when sttStream is on: nova-3 (v1) or flux (v2 flux-general-multi). */
+  /** Live STT model when sttStream is on: nova-3 (v1) or flux (v2 flux-general-multi, multilingual + JA). */
   sttStreamModel: (() => {
     const raw = process.env.STT_STREAM_MODEL ?? "nova-3";
     return raw === "flux" ? ("flux" as const) : ("nova-3" as const);
