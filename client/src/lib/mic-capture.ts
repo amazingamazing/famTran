@@ -36,20 +36,52 @@ export const floatToPcm16 = (input: Float32Array): Int16Array => {
   return output;
 };
 
+const sleepMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const waitForTracksLive = async (stream: MediaStream, timeoutMs = 1500) => {
+  const tracks = stream.getTracks();
+  if (tracks.length === 0 || tracks.every((track) => track.readyState === "live")) {
+    return;
+  }
+  await Promise.race([
+    Promise.all(
+      tracks.map(
+        (track) =>
+          new Promise<void>((resolve) => {
+            if (track.readyState === "live") {
+              resolve();
+              return;
+            }
+            track.addEventListener("unmute", () => resolve(), { once: true });
+          })
+      )
+    ),
+    sleepMs(timeoutMs)
+  ]);
+};
+
 export type MicCaptureHandle = {
   sampleRate: number;
+  /** True while any underlying MediaStreamTrack is still `live`. */
+  isLive: () => boolean;
   stop: () => Promise<void>;
 };
 
 export type MicCaptureOptions = {
   onPcmChunk: (pcm16: Int16Array) => void;
+  /**
+   * Quick Chat: after getUserMedia becomes live, wait this long before enabling PCM
+   * callbacks so the first spoken word is not clipped. Room mode omits this.
+   */
+  warmupMs?: number;
 };
 
 /**
  * Captures mono PCM16 @ 16 kHz via AudioWorklet. Uses a zero-gain node so the graph runs without audible loopback.
+ * Always stops every MediaStreamTrack and drops the stream reference on {@link MicCaptureHandle.stop}.
  */
 export const startMicCapture = async (options: MicCaptureOptions): Promise<MicCaptureHandle> => {
-  const stream = await navigator.mediaDevices.getUserMedia({
+  let stream: MediaStream | null = await navigator.mediaDevices.getUserMedia({
     audio: {
       channelCount: 1,
       echoCancellation: true,
@@ -57,6 +89,11 @@ export const startMicCapture = async (options: MicCaptureOptions): Promise<MicCa
       autoGainControl: true
     }
   });
+
+  await waitForTracksLive(stream);
+  if (options.warmupMs && options.warmupMs > 0) {
+    await sleepMs(options.warmupMs);
+  }
 
   let audioContext: AudioContext;
   try {
@@ -81,8 +118,12 @@ export const startMicCapture = async (options: MicCaptureOptions): Promise<MicCa
   silentGain.connect(audioContext.destination);
 
   const effectiveRate = audioContext.sampleRate;
+  let stopped = false;
 
   worklet.port.onmessage = (event: MessageEvent<{ samples: Float32Array }>) => {
+    if (stopped) {
+      return;
+    }
     const samples = event.data?.samples;
     if (!samples?.length) {
       return;
@@ -93,13 +134,49 @@ export const startMicCapture = async (options: MicCaptureOptions): Promise<MicCa
 
   return {
     sampleRate: effectiveRate,
+    isLive: () => {
+      if (!stream || stopped) {
+        return false;
+      }
+      return stream.getTracks().some((track) => track.readyState === "live");
+    },
     stop: async () => {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
       worklet.port.onmessage = null;
-      worklet.disconnect();
-      source.disconnect();
-      silentGain.disconnect();
-      stream.getTracks().forEach((track) => track.stop());
-      await audioContext.close();
+      try {
+        worklet.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      try {
+        source.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      try {
+        silentGain.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      const active = stream;
+      stream = null;
+      if (active) {
+        for (const track of active.getTracks()) {
+          try {
+            track.stop();
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      try {
+        await audioContext.close();
+      } catch {
+        /* already closed */
+      }
     }
   };
 };

@@ -43,12 +43,105 @@ export const convertPcm16MonoToWavBytes = (pcmBytes: Uint8Array, sampleRate: num
   return wavBytes;
 };
 
+export const audioPayloadToWavBytes = (
+  payloadBase64: string,
+  mimeType: AudioChunkMimeType
+): Uint8Array => {
+  const bytes = base64ToBytes(payloadBase64);
+  return mimeType === "audio/pcm" ? convertPcm16MonoToWavBytes(bytes, 22050) : bytes;
+};
+
 export const audioPayloadToObjectUrl = (
   payloadBase64: string,
   mimeType: AudioChunkMimeType
 ): { url: string; mimeType: "audio/wav" } => {
-  const bytes = base64ToBytes(payloadBase64);
-  const wavBytes = mimeType === "audio/pcm" ? convertPcm16MonoToWavBytes(bytes, 22050) : bytes;
+  const wavBytes = audioPayloadToWavBytes(payloadBase64, mimeType);
   const blob = new Blob([toArrayBuffer(wavBytes)], { type: "audio/wav" });
   return { url: URL.createObjectURL(blob), mimeType: "audio/wav" };
+};
+
+/** English → right (+1), Japanese → left (−1). */
+export const panForTargetLanguage = (targetLanguage: "en" | "ja" | undefined): number => {
+  if (targetLanguage === "ja") {
+    return -1;
+  }
+  if (targetLanguage === "en") {
+    return 1;
+  }
+  return 0;
+};
+
+export const supportsStereoPanner = (ctx: AudioContext): boolean =>
+  typeof ctx.createStereoPanner === "function";
+
+/**
+ * Connect a mono BufferSource to destination with stereo pan.
+ * Prefers StereoPannerNode; falls back to ChannelMerger + dual GainNodes.
+ */
+export const connectPannedSource = (
+  ctx: AudioContext,
+  source: AudioBufferSourceNode,
+  pan: number
+): AudioNode => {
+  if (supportsStereoPanner(ctx)) {
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = Math.max(-1, Math.min(1, pan));
+    source.connect(panner);
+    panner.connect(ctx.destination);
+    return panner;
+  }
+
+  const gainL = ctx.createGain();
+  const gainR = ctx.createGain();
+  const merger = ctx.createChannelMerger(2);
+  const clamped = Math.max(-1, Math.min(1, pan));
+  // Hard left / right / center for the merger fallback.
+  if (clamped < -0.01) {
+    gainL.gain.value = 1;
+    gainR.gain.value = 0;
+  } else if (clamped > 0.01) {
+    gainL.gain.value = 0;
+    gainR.gain.value = 1;
+  } else {
+    gainL.gain.value = 1;
+    gainR.gain.value = 1;
+  }
+  source.connect(gainL);
+  source.connect(gainR);
+  gainL.connect(merger, 0, 0);
+  gainR.connect(merger, 0, 1);
+  merger.connect(ctx.destination);
+  return merger;
+};
+
+let sharedPlaybackContext: AudioContext | null = null;
+
+/** Shared playback graph (separate from mic capture context) for Quick Chat stereo TTS. */
+export const ensurePlaybackAudioContext = async (): Promise<AudioContext> => {
+  if (!sharedPlaybackContext || sharedPlaybackContext.state === "closed") {
+    sharedPlaybackContext = new AudioContext();
+  }
+  if (sharedPlaybackContext.state === "suspended") {
+    await sharedPlaybackContext.resume();
+  }
+  return sharedPlaybackContext;
+};
+
+export const playPannedWavBytes = async (
+  ctx: AudioContext,
+  wavBytes: Uint8Array,
+  pan: number
+): Promise<void> => {
+  const audioBuffer = await ctx.decodeAudioData(toArrayBuffer(wavBytes));
+  const source = ctx.createBufferSource();
+  source.buffer = audioBuffer;
+  connectPannedSource(ctx, source, pan);
+  await new Promise<void>((resolve, reject) => {
+    source.onended = () => resolve();
+    try {
+      source.start(0);
+    } catch (err) {
+      reject(err);
+    }
+  });
 };

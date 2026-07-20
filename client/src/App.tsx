@@ -9,13 +9,20 @@ import type {
 
 import "./App.css";
 import { appStrings } from "./lib/app-strings";
-import { audioPayloadToObjectUrl } from "./lib/audio-playback";
+import {
+  audioPayloadToObjectUrl,
+  audioPayloadToWavBytes,
+  ensurePlaybackAudioContext,
+  panForTargetLanguage,
+  playPannedWavBytes
+} from "./lib/audio-playback";
 import { startMicCapture, type MicCaptureHandle } from "./lib/mic-capture";
 import { parseEvent } from "./lib/parse-event";
 import {
   canStartMicCapture,
   getOrCreateGlossaryUserId,
   isMicStopNoOp,
+  MIC_START_WARMUP_MS,
   MIC_STOP_GRACE_MS,
   ONBOARDING_DONE_COOKIE,
   QC_TTS_GENDER_EN_KEY,
@@ -359,10 +366,18 @@ const uint8ToBase64 = (bytes: Uint8Array): string => {
 
 function App() {
   const wsRef = useRef<WebSocket | null>(null);
-  const audioQueueRef = useRef<Array<{ payloadBase64: string; mimeType: "audio/pcm" | "audio/wav"; isLast: boolean }>>([]);
+  const audioQueueRef = useRef<
+    Array<{
+      payloadBase64: string;
+      mimeType: "audio/pcm" | "audio/wav";
+      isLast: boolean;
+      targetLanguage?: SupportedLanguage;
+    }>
+  >([]);
   const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
   const sharedPlaybackBlobUrlRef = useRef<string | null>(null);
   const playingRef = useRef(false);
+  const [qcPlaybackDebug, setQcPlaybackDebug] = useState("");
   const autopilotTimeoutRef = useRef<number | null>(null);
   const autoPilotEnabledRef = useRef(false);
   const debugEventsRef = useRef<string[]>([]);
@@ -490,6 +505,31 @@ function App() {
     }
     playingRef.current = true;
 
+    if (appModeRef.current === "quickChat") {
+      void (async () => {
+        try {
+          const ctx = await ensurePlaybackAudioContext();
+          const micLive = micCaptureRef.current?.isLive() ?? false;
+          setQcPlaybackDebug(
+            `ch=${ctx.destination.channelCount} (max ${ctx.destination.maxChannelCount}) micLive=${micLive}`
+          );
+          addDebugEvent(
+            `audio.qc.play ch=${ctx.destination.channelCount} micLive=${micLive} panLang=${next.targetLanguage ?? "n/a"}`
+          );
+          const pan = panForTargetLanguage(next.targetLanguage);
+          const wavBytes = audioPayloadToWavBytes(next.payloadBase64, next.mimeType);
+          // Play even if mic is still live (iOS may mono-downmix); never block on mic state.
+          await playPannedWavBytes(ctx, wavBytes, pan);
+        } catch {
+          addDebugEvent(`audio.qc.playback.failed mime=${next.mimeType}`);
+        } finally {
+          playingRef.current = false;
+          playQueue();
+        }
+      })();
+      return;
+    }
+
     try {
       const playable = audioPayloadToObjectUrl(next.payloadBase64, next.mimeType);
       const url = playable.url;
@@ -558,6 +598,11 @@ function App() {
 
   const unlockPlaybackAudio = useCallback(async () => {
     if (playbackUnlocked && playbackAudioRef.current) {
+      try {
+        await ensurePlaybackAudioContext();
+      } catch {
+        /* ignore — HTML audio unlock already done */
+      }
       return;
     }
     try {
@@ -577,6 +622,8 @@ function App() {
       URL.revokeObjectURL(url);
       el.removeAttribute("src");
       el.load();
+
+      await ensurePlaybackAudioContext();
 
       setPlaybackUnlocked(true);
       addDebugEvent("audio.unlock.ok");
@@ -1035,11 +1082,12 @@ function App() {
         audioQueueRef.current.push({
           payloadBase64: event.payloadBase64,
           mimeType: event.mimeType,
-          isLast: event.isLast
+          isLast: event.isLast,
+          targetLanguage: event.targetLanguage
         });
         playQueue();
         addDebugEvent(
-          `audio.chunk turn=${event.turnId} mime=${event.mimeType} last=${event.isLast} tts=${event.debug?.ttsPath ?? "n/a"}`
+          `audio.chunk turn=${event.turnId} lang=${event.targetLanguage} mime=${event.mimeType} last=${event.isLast} tts=${event.debug?.ttsPath ?? "n/a"}`
         );
         return;
       }
@@ -1133,7 +1181,7 @@ function App() {
       );
     }
 
-    addDebugEvent(`mic.stop turn=${micTurnIdRef.current ?? "n/a"}`);
+    addDebugEvent(`mic.stop turn=${micTurnIdRef.current ?? "n/a"} live=false`);
     micTurnIdRef.current = null;
     micFinishingRef.current = false;
     setMicFinishing(false);
@@ -1201,43 +1249,57 @@ function App() {
       const speakerLanguage = opts?.sourceLanguage ?? language;
       const turnVoiceGender = opts?.voiceGender ?? voiceGender;
       const solo = appModeRef.current === "quickChat";
-
-      wsRef.current.send(
-        JSON.stringify({
-          type: "turn.start",
-          turnId,
-          speakerLanguage,
-          ...(solo ? { voiceGender: turnVoiceGender } : {})
-        })
-      );
-
       const wsForChunks = wsRef.current;
 
-      const capture = await startMicCapture({
-        onPcmChunk: (pcm16) => {
-          if (!wsForChunks || wsForChunks.readyState !== WebSocket.OPEN || !micTurnIdRef.current) {
-            return;
-          }
-          wsForChunks.send(
-            JSON.stringify({
-              type: "audio.input",
-              turnId: micTurnIdRef.current,
-              payloadBase64: uint8ToBase64(new Uint8Array(pcm16.buffer)),
-              sequence: micSequenceRef.current,
-              isLast: false
-            })
-          );
-          micSequenceRef.current += 1;
-        }
-      });
+      if (solo && opts?.sourceLanguage) {
+        // Show active state during getUserMedia + start warm-up (PCM still gated).
+        setQcSpeaking(opts.sourceLanguage);
+        setMicTestActive(true);
+      }
 
-      micCaptureRef.current = capture;
+      const openMic = async () =>
+        startMicCapture({
+          onPcmChunk: (pcm16) => {
+            if (!wsForChunks || wsForChunks.readyState !== WebSocket.OPEN || !micTurnIdRef.current) {
+              return;
+            }
+            wsForChunks.send(
+              JSON.stringify({
+                type: "audio.input",
+                turnId: micTurnIdRef.current,
+                payloadBase64: uint8ToBase64(new Uint8Array(pcm16.buffer)),
+                sequence: micSequenceRef.current,
+                isLast: false
+              })
+            );
+            micSequenceRef.current += 1;
+          },
+          ...(solo ? { warmupMs: MIC_START_WARMUP_MS } : {})
+        });
+
+      // Quick Chat: fully re-acquire + warm up before turn.start so the first word isn't clipped.
+      // Room mode: keep prior order (turn.start then capture) — do not change that lifecycle.
+      const capture = solo ? await openMic() : null;
+
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "turn.start",
+            turnId,
+            speakerLanguage,
+            ...(solo ? { voiceGender: turnVoiceGender } : {})
+          })
+        );
+      }
+
+      const readyCapture = capture ?? (await openMic());
+      micCaptureRef.current = readyCapture;
       setMicTestActive(true);
       if (solo && opts?.sourceLanguage) {
         setQcSpeaking(opts.sourceLanguage);
       }
       addDebugEvent(
-        `mic.start turn=${turnId} lang=${speakerLanguage} sampleRate=${capture.sampleRate} worklet=pcm-capture-processor`
+        `mic.start turn=${turnId} lang=${speakerLanguage} sampleRate=${readyCapture.sampleRate} warmupMs=${solo ? MIC_START_WARMUP_MS : 0} worklet=pcm-capture-processor`
       );
     } catch {
       setStatusMessage(S.statusMicFailed);
@@ -1759,6 +1821,11 @@ function App() {
         </section>
 
         <section className="quickChatTranscript" aria-label={S.chatConversation}>
+          {qcPlaybackDebug ? (
+            <p className="qcAudioDebug" aria-live="polite">
+              {qcPlaybackDebug}
+            </p>
+          ) : null}
           <div
             className="coreChatScroller quickChatScroller"
             ref={threadRef}
