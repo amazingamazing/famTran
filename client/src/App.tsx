@@ -412,8 +412,8 @@ function App() {
   const [voiceGender, setVoiceGender] = useState<VoiceGender>(() =>
     onboardingDoneInit ? parseVoiceGender(getCookie("family_translation_voice_gender")) : "female"
   );
-  const [appMode, setAppMode] = useState<AppMode>("rooms");
-  const appModeRef = useRef<AppMode>("rooms");
+  const [appMode, setAppMode] = useState<AppMode>("quickChat");
+  const appModeRef = useRef<AppMode>("quickChat");
   const [qcSpeaking, setQcSpeaking] = useState<SupportedLanguage | null>(null);
   const [qcGenderJa, setQcGenderJa] = useState<VoiceGender>(() =>
     readQcTtsGender(
