@@ -90,6 +90,12 @@ export const MIC_STOP_GRACE_MS = 500;
 /** Quick Chat: delay after mic is live before PCM is forwarded (mirrors stop grace at start). */
 export const MIC_START_WARMUP_MS = 500;
 
+/**
+ * Quick Chat: delay before the talk button turns red. Capture/warmup still start immediately;
+ * this only holds the "listening" visual so speakers wait until the mic is actually ready.
+ */
+export const MIC_RECORDING_UI_DELAY_MS = 500;
+
 export const canStartMicCapture = (args: { micTestActive: boolean; micFinishing: boolean }) =>
   !args.micTestActive && !args.micFinishing;
 

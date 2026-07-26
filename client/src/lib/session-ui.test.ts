@@ -5,6 +5,7 @@ import {
   GLOSSARY_USER_ID_COOKIE,
   getOrCreateGlossaryUserId,
   isMicStopNoOp,
+  MIC_RECORDING_UI_DELAY_MS,
   MIC_START_WARMUP_MS,
   MIC_STOP_GRACE_MS,
   readControlsExpandedPreference,
@@ -69,6 +70,7 @@ describe("session-ui helpers", () => {
   it("defines mic stop grace and quick-chat start warm-up", () => {
     expect(MIC_STOP_GRACE_MS).toBe(500);
     expect(MIC_START_WARMUP_MS).toBe(500);
+    expect(MIC_RECORDING_UI_DELAY_MS).toBe(500);
   });
 
   it("blocks mic capture start while recording or finishing", () => {

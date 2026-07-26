@@ -22,6 +22,7 @@ import {
   canStartMicCapture,
   getOrCreateGlossaryUserId,
   isMicStopNoOp,
+  MIC_RECORDING_UI_DELAY_MS,
   MIC_START_WARMUP_MS,
   MIC_STOP_GRACE_MS,
   ONBOARDING_DONE_COOKIE,
@@ -387,6 +388,8 @@ function App() {
   const micSequenceRef = useRef(0);
   const micFinishingRef = useRef(false);
   const micStopGraceTimerRef = useRef<number | null>(null);
+  const micRecordingUiTimerRef = useRef<number | null>(null);
+  const [micRecordingUiReady, setMicRecordingUiReady] = useState(false);
   const autoConnectAttemptedRef = useRef(false);
   const connectRef = useRef<(opts?: { roomType?: RoomType }) => void>(() => undefined);
   const stopMicTestRef = useRef<(opts?: { immediate?: boolean }) => Promise<void>>(async () => {});
@@ -1165,6 +1168,13 @@ function App() {
     }
   };
 
+  const clearMicRecordingUiTimer = () => {
+    if (micRecordingUiTimerRef.current !== null) {
+      window.clearTimeout(micRecordingUiTimerRef.current);
+      micRecordingUiTimerRef.current = null;
+    }
+  };
+
   const tearDownMicCapture = async () => {
     const capture = micCaptureRef.current;
     micCaptureRef.current = null;
@@ -1184,8 +1194,10 @@ function App() {
     addDebugEvent(`mic.stop turn=${micTurnIdRef.current ?? "n/a"} live=false`);
     micTurnIdRef.current = null;
     micFinishingRef.current = false;
+    clearMicRecordingUiTimer();
     setMicFinishing(false);
     setMicTestActive(false);
+    setMicRecordingUiReady(false);
     setQcSpeaking(null);
   };
 
@@ -1216,6 +1228,7 @@ function App() {
     setMicFinishing(true);
     addDebugEvent(`mic.stop.requested turn=${micTurnIdRef.current ?? "n/a"}`);
     clearMicStopGraceTimer();
+    clearMicRecordingUiTimer();
     micStopGraceTimerRef.current = window.setTimeout(() => {
       micStopGraceTimerRef.current = null;
       void tearDownMicCapture();
@@ -1252,9 +1265,16 @@ function App() {
       const wsForChunks = wsRef.current;
 
       if (solo && opts?.sourceLanguage) {
-        // Show active state during getUserMedia + start warm-up (PCM still gated).
+        // Lock the other button and block re-entry during getUserMedia + start warm-up.
+        // Red "listening" UI waits MIC_RECORDING_UI_DELAY_MS so speakers don't talk before PCM is live.
         setQcSpeaking(opts.sourceLanguage);
         setMicTestActive(true);
+        clearMicRecordingUiTimer();
+        setMicRecordingUiReady(false);
+        micRecordingUiTimerRef.current = window.setTimeout(() => {
+          micRecordingUiTimerRef.current = null;
+          setMicRecordingUiReady(true);
+        }, MIC_RECORDING_UI_DELAY_MS);
       }
 
       const openMic = async () =>
@@ -1669,8 +1689,8 @@ function App() {
   }
 
   if (appMode === "quickChat") {
-    const jaRecording = qcSpeaking === "ja" && (micTestActive || micFinishing);
-    const enRecording = qcSpeaking === "en" && (micTestActive || micFinishing);
+    const jaRecording = qcSpeaking === "ja" && (micRecordingUiReady || micFinishing);
+    const enRecording = qcSpeaking === "en" && (micRecordingUiReady || micFinishing);
     const jaDisabled = Boolean(qcSpeaking && qcSpeaking !== "ja") || micFinishing;
     const enDisabled = Boolean(qcSpeaking && qcSpeaking !== "en") || micFinishing;
 
