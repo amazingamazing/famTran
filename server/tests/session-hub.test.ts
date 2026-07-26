@@ -562,6 +562,59 @@ describe("SessionHub", () => {
     expect(audio.targetLanguage).toBe("en");
   });
 
+  it("solo Quick Chat still sends TTS when family hearAudio preference is false", async () => {
+    const soloSocket = new MockSocket();
+    const soloId = hub.join(soloSocket as never, {
+      type: "session.join",
+      displayName: "TextOnlyInRooms",
+      language: "ja",
+      mode: "full_audio",
+      contextNotes: "",
+      hearAudio: false,
+      roomType: "solo",
+      voiceGender: "female"
+    });
+
+    await hub.handleEvent(soloId, {
+      type: "turn.start",
+      turnId: "solo-hear-off-en",
+      speakerLanguage: "en",
+      voiceGender: "female"
+    });
+    await hub.handleEvent(soloId, {
+      type: "audio.input",
+      turnId: "solo-hear-off-en",
+      payloadBase64: Buffer.from("Hello both sides").toString("base64"),
+      sequence: 0,
+      isLast: true
+    });
+    await hub.handleEvent(soloId, { type: "turn.stop", turnId: "solo-hear-off-en" });
+
+    let soloEvents = soloSocket.sent.map((item) => JSON.parse(item));
+    expect(soloEvents.some((event) => event.type === "audio.chunk")).toBe(true);
+    expect(soloEvents.find((event) => event.type === "audio.chunk")?.targetLanguage).toBe("ja");
+
+    soloSocket.sent.length = 0;
+    await hub.handleEvent(soloId, {
+      type: "turn.start",
+      turnId: "solo-hear-off-ja",
+      speakerLanguage: "ja",
+      voiceGender: "male"
+    });
+    await hub.handleEvent(soloId, {
+      type: "audio.input",
+      turnId: "solo-hear-off-ja",
+      payloadBase64: Buffer.from("こんにちは両側").toString("base64"),
+      sequence: 0,
+      isLast: true
+    });
+    await hub.handleEvent(soloId, { type: "turn.stop", turnId: "solo-hear-off-ja" });
+
+    soloEvents = soloSocket.sent.map((item) => JSON.parse(item));
+    expect(soloEvents.some((event) => event.type === "audio.chunk")).toBe(true);
+    expect(soloEvents.find((event) => event.type === "audio.chunk")?.targetLanguage).toBe("en");
+  });
+
   it("solo rooms write nothing to SQLite", async () => {
     const soloSocket = new MockSocket();
     const soloId = hub.join(soloSocket as never, {

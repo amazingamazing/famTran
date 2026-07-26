@@ -445,7 +445,8 @@ export class SessionHub {
       socket,
       displayName: event.displayName,
       language: event.language,
-      hearAudio: event.hearAudio,
+      // Solo / Quick Chat always gets TTS regardless of the family-room hearAudio preference.
+      hearAudio: roomType === "solo" ? true : event.hearAudio,
       voiceGender: event.voiceGender ?? "female",
       contextNotes: event.contextNotes,
       roomId,
@@ -995,6 +996,7 @@ export class SessionHub {
       voiceSelection: "first"
     });
 
+    // Always deliver translation TTS to the solo speaker (ignore family hearAudio preference).
     this.send(sourceSpeaker.socket, {
       type: "transcript.chunk",
       turnId,

@@ -412,6 +412,7 @@ function App() {
   const [hearAudio, setHearAudio] = useState(() =>
     onboardingDoneInit ? getCookieBoolean("family_translation_hear_audio", true) : true
   );
+  const hearAudioRef = useRef(hearAudio);
   const [voiceGender, setVoiceGender] = useState<VoiceGender>(() =>
     onboardingDoneInit ? parseVoiceGender(getCookie("family_translation_voice_gender")) : "female"
   );
@@ -680,6 +681,7 @@ function App() {
 
   useEffect(() => {
     setCookie("family_translation_hear_audio", String(hearAudio));
+    hearAudioRef.current = hearAudio;
   }, [hearAudio]);
 
   useEffect(() => {
@@ -1082,6 +1084,13 @@ function App() {
         return;
       }
       if (event.type === "audio.chunk") {
+        // Rooms: honor hear-TTS preference. Quick Chat always plays both directions.
+        if (appModeRef.current !== "quickChat" && !hearAudioRef.current) {
+          addDebugEvent(
+            `audio.chunk.skipped turn=${event.turnId} reason=hearAudio_off lang=${event.targetLanguage}`
+          );
+          return;
+        }
         audioQueueRef.current.push({
           payloadBase64: event.payloadBase64,
           mimeType: event.mimeType,
