@@ -853,7 +853,8 @@ button.onboardingPrimary {
 }
 
 .quickChatTalk {
-  flex: 2 1 0;
+  flex: 0 0 40%;
+  max-height: 40%;
   min-height: 0;
   display: flex;
   gap: 0.65rem;
